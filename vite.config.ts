@@ -6,8 +6,9 @@ import renderer from 'vite-plugin-electron-renderer'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
-export default defineConfig({
-  base: './',
+export default defineConfig(({ command, mode }) => ({
+  // Use relative path for Electron, but repository name for GitHub Pages
+  base: mode === 'githubpages' ? '/yingshicang-pc/' : './',
   plugins: [
     react(),
     VitePWA({
@@ -34,19 +35,17 @@ export default defineConfig({
         ]
       }
     }),
-    electron({
-      main: {
-        // Shortcut of `build.lib.entry`.
-        entry: 'electron/main.ts',
-      },
-      preload: {
-        // Shortcut of `build.rollupOptions.input`.
-        // Preload scripts may contain Web assets, so use the `build.rollupOptions.input` instead `build.lib.entry`.
-        input: path.join(__dirname, 'electron/preload.ts'),
-      },
-      // Ployfill the Electron and Node.js built-in modules for Renderer process.
-      // See 👉 https://github.com/electron-vite/vite-plugin-electron-renderer
-    }),
-    renderer(),
+    // Only include electron plugin when not building for GitHub Pages
+    ...(mode !== 'githubpages' ? [
+      electron({
+        main: {
+          entry: 'electron/main.ts',
+        },
+        preload: {
+          input: path.join(__dirname, 'electron/preload.ts'),
+        },
+      }),
+      renderer()
+    ] : [])
   ],
-})
+}))
