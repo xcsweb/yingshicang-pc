@@ -6,7 +6,7 @@ import renderer from 'vite-plugin-electron-renderer'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
-export default defineConfig(({ command, mode }) => ({
+export default defineConfig(({ mode }) => ({
   // Use relative path for Electron, but repository name for GitHub Pages
   base: mode === 'githubpages' ? '/yingshicang-pc/' : './',
   plugins: [
