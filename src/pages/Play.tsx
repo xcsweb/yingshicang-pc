@@ -21,6 +21,7 @@ interface VideoDetail {
   vod_pic: string
   vod_play_from?: string
   vod_play_url?: string
+  vod_remarks?: string
 }
 
 const Play: React.FC = () => {
@@ -46,7 +47,6 @@ const Play: React.FC = () => {
   const artRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<Artplayer | null>(null)
 
-  // Fetch data if not passed via state
   useEffect(() => {
     if (detail) return
 
@@ -155,7 +155,6 @@ const Play: React.FC = () => {
     fetchDetail()
   }, [siteKey, vodId, sites, detail])
 
-  // Initialize player
   useEffect(() => {
     if (!playSources.length || !artRef.current) return
 
@@ -179,7 +178,6 @@ const Play: React.FC = () => {
       }
     }
 
-    // Destroy previous instance
     if (playerRef.current) {
       playerRef.current.destroy(false)
     }
@@ -215,7 +213,7 @@ const Play: React.FC = () => {
       playsInline: true,
       autoPlayback: true,
       airplay: true,
-      theme: '#2563eb',
+      theme: '#00AEEC',
       lang: navigator.language.toLowerCase(),
     })
 
@@ -227,7 +225,6 @@ const Play: React.FC = () => {
     }
   }, [playSources, currentSourceIndex, currentEpisodeIndex, detail])
 
-  // Handle switching source or episode
   const switchEpisode = (sIndex: number, eIndex: number) => {
     setCurrentSourceIndex(sIndex)
     setCurrentEpisodeIndex(eIndex)
@@ -238,72 +235,91 @@ const Play: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-white text-bili-text">
       {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center shadow-md z-10 flex-shrink-0">
+      <header className="sticky top-0 z-50 bg-white border-b border-bili-border h-16 flex items-center px-4 sm:px-6 shadow-sm">
         <button 
           onClick={() => navigate(-1)} 
-          className="mr-4 p-2 hover:bg-gray-700 rounded-full transition-colors"
+          className="mr-4 p-2 text-bili-textLight hover:text-bili-text hover:bg-bili-grayBg rounded-full transition-colors"
         >
-          <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
         </button>
-        <h1 className="text-xl font-bold text-gray-100 truncate flex-1">
-          {detail ? detail.vod_name : '正在播放'}
-          {playSources[currentSourceIndex] && (
-            <span className="ml-2 text-sm font-normal text-gray-400">
-              - {playSources[currentSourceIndex].episodes[currentEpisodeIndex]?.name}
-            </span>
-          )}
+        <h1 className="text-lg font-medium text-bili-text truncate flex-1 cursor-pointer" onClick={() => navigate('/')}>
+          影视仓<span className="text-bili-textLight text-sm ml-1">PC</span>
         </h1>
-      </div>
+      </header>
 
       {loading ? (
-        <div className="flex-1 flex justify-center items-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-          <span className="ml-3 text-gray-400 font-medium">加载数据中...</span>
+        <div className="flex-1 flex flex-col justify-center items-center min-h-[40vh] gap-3">
+          <div className="w-10 h-10 border-4 border-bili-grayBg border-t-bili-blue rounded-full animate-spin"></div>
+          <span className="text-bili-textLight text-sm">加载数据中...</span>
         </div>
       ) : error ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-red-500">
-          <svg className="w-16 h-16 mb-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-          <p className="text-lg font-medium text-gray-200">{error}</p>
+        <div className="flex-1 flex flex-col items-center justify-center text-center min-h-[40vh]">
+          <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="error" className="w-48 mb-4 opacity-80" />
+          <p className="text-bili-text font-medium">{error}</p>
         </div>
       ) : (
-        <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
-          {/* Player Area */}
-          <div className="w-full md:flex-1 bg-black flex flex-col flex-none aspect-video md:aspect-auto min-h-0">
-            <div ref={artRef} className="w-full h-full"></div>
+        <main className="flex-1 max-w-[1400px] mx-auto w-full p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6 lg:gap-8">
+          {/* Left: Player & Info */}
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="bg-black rounded-xl overflow-hidden shadow-lg mb-4 aspect-video w-full">
+              <div ref={artRef} className="w-full h-full"></div>
+            </div>
+            
+            <div className="mb-6">
+              <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2">
+                {detail?.vod_name}
+              </h1>
+              <div className="flex items-center text-sm text-bili-textLight gap-4">
+                <span className="flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  {playSources[currentSourceIndex]?.episodes[currentEpisodeIndex]?.name}
+                </span>
+                {detail?.vod_remarks && (
+                  <span className="px-2 py-0.5 bg-bili-grayBg text-bili-textLight rounded text-xs">
+                    {detail.vod_remarks}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
           
-          {/* Playlist Sidebar */}
-          <div className="flex-1 md:flex-none w-full md:w-80 lg:w-96 bg-gray-800 border-t md:border-t-0 md:border-l border-gray-700 flex flex-col overflow-hidden">
-            <div className="p-3 md:p-4 border-b border-gray-700 flex-shrink-0 overflow-x-auto custom-scrollbar">
-              <div className="flex gap-2 whitespace-nowrap">
+          {/* Right: Playlist */}
+          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col bg-bili-grayBg/30 rounded-xl border border-bili-border overflow-hidden h-fit max-h-[800px]">
+            <div className="p-4 border-b border-bili-border bg-white flex justify-between items-center">
+              <h3 className="font-medium text-bili-text">视频选集</h3>
+              <span className="text-xs text-bili-textLight bg-bili-grayBg px-2 py-1 rounded">共 {playSources[currentSourceIndex]?.episodes.length || 0} 集</span>
+            </div>
+            
+            {playSources.length > 1 && (
+              <div className="px-4 py-3 bg-white border-b border-bili-border flex overflow-x-auto custom-scrollbar gap-2">
                 {playSources.map((source, index) => (
                   <button
                     key={index}
                     onClick={() => setCurrentSourceIndex(index)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    className={`whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                       currentSourceIndex === index
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        ? 'bg-bili-blue text-white'
+                        : 'bg-bili-grayBg text-bili-textLight hover:text-bili-text'
                     }`}
                   >
                     {source.sourceName}
                   </button>
                 ))}
               </div>
-            </div>
+            )}
             
-            <div className="flex-1 overflow-y-auto p-3 md:p-4 custom-scrollbar">
-              <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-white">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
                 {playSources[currentSourceIndex]?.episodes.map((ep, index) => (
                   <button
                     key={index}
                     onClick={() => switchEpisode(currentSourceIndex, index)}
-                    className={`px-2 py-1.5 md:py-2 border rounded text-xs md:text-sm truncate transition-colors text-center ${
+                    className={`px-2 py-2 border rounded-md text-xs sm:text-sm truncate transition-all text-center ${
                       currentEpisodeIndex === index
-                        ? 'bg-blue-600/20 border-blue-500 text-blue-400'
-                        : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-500 hover:text-white'
+                        ? 'bg-white border-bili-blue text-bili-blue shadow-sm font-medium'
+                        : 'bg-white border-bili-border text-bili-text hover:border-bili-blue/50 hover:text-bili-blue'
                     }`}
                     title={ep.name}
                   >
@@ -313,7 +329,7 @@ const Play: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </main>
       )}
     </div>
   )

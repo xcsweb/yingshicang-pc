@@ -94,8 +94,7 @@ const Detail: React.FC = () => {
       try {
         const url = new URL(apiUrl)
         const params = new URLSearchParams(url.search)
-        // 按照要求添加 ac=detail&ac=videolist&ids=vod_id
-        params.delete('ac') // 清除可能已有的 ac 参数
+        params.delete('ac')
         params.append('ac', 'detail')
         params.append('ac', 'videolist')
         params.set('ids', vodId)
@@ -111,7 +110,6 @@ const Detail: React.FC = () => {
           const videoData = response.data.list[0]
           setDetail(videoData)
           
-          // 解析播放线路和剧集
           if (videoData.vod_play_from && videoData.vod_play_url) {
             const sources = videoData.vod_play_from.split('$$$')
             const urls = videoData.vod_play_url.split('$$$')
@@ -149,112 +147,117 @@ const Detail: React.FC = () => {
   }, [siteKey, vodId, sites])
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-white text-bili-text">
       {/* 头部导航 */}
-      <div className="bg-white border-b border-gray-200 p-4 flex items-center shadow-sm z-10">
+      <header className="sticky top-0 z-50 bg-white border-b border-bili-border h-16 flex items-center px-4 sm:px-6 shadow-sm">
         <button 
           onClick={() => navigate(-1)} 
-          className="mr-4 p-2 hover:bg-gray-100 rounded-full transition-colors"
+          className="mr-4 p-2 text-bili-textLight hover:text-bili-text hover:bg-bili-grayBg rounded-full transition-colors"
         >
-          <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
         </button>
-        <h1 className="text-xl font-bold text-gray-800 truncate flex-1">
+        <h1 className="text-lg font-medium text-bili-text truncate flex-1">
           {detail ? detail.vod_name : '影片详情'}
         </h1>
-      </div>
+      </header>
 
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-        {loading ? (
-          <div className="flex justify-center items-center h-full">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <span className="ml-3 text-gray-500 font-medium">加载详情中...</span>
-          </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center h-full text-red-500">
-            <svg className="w-16 h-16 mb-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            <p className="text-lg font-medium text-gray-800">{error}</p>
-          </div>
-        ) : detail ? (
-          <div className="max-w-6xl mx-auto space-y-6">
-            {/* 影片信息卡片 */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6 flex flex-col md:flex-row gap-4 md:gap-6">
-              <div className="w-32 sm:w-40 md:w-48 flex-shrink-0 mx-auto md:mx-0">
-                <div className="aspect-[3/4] rounded-lg overflow-hidden bg-gray-100 shadow-inner">
-                  <img 
-                    src={detail.vod_pic} 
-                    alt={detail.vod_name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x400?text=No+Image'
-                    }}
-                  />
-                </div>
-              </div>
-              
-              <div className="flex-1 space-y-3">
-                <h2 className="text-2xl font-bold text-gray-900">{detail.vod_name}</h2>
-                <div className="flex flex-wrap gap-2 text-sm text-gray-600">
-                  {detail.type_name && <span className="px-2 py-1 bg-gray-100 rounded">{detail.type_name}</span>}
-                  {detail.vod_year && <span className="px-2 py-1 bg-gray-100 rounded">{detail.vod_year}</span>}
-                  {detail.vod_area && <span className="px-2 py-1 bg-gray-100 rounded">{detail.vod_area}</span>}
-                  {detail.vod_remarks && <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded">{detail.vod_remarks}</span>}
-                </div>
-                
-                <div className="text-sm space-y-1.5 mt-4 text-gray-700">
-                  {detail.vod_director && <p><span className="text-gray-500 mr-2">导演:</span>{detail.vod_director}</p>}
-                  {detail.vod_actor && <p><span className="text-gray-500 mr-2">主演:</span>{detail.vod_actor}</p>}
-                </div>
-                
-                {detail.vod_content && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
-                    <h3 className="text-sm font-medium text-gray-900 mb-2">剧情简介</h3>
-                    <p className="text-sm text-gray-600 leading-relaxed" dangerouslySetInnerHTML={{ __html: detail.vod_content.replace(/<[^>]+>/g, '') }}></p>
-                  </div>
-                )}
-              </div>
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar bg-white">
+        <div className="max-w-6xl mx-auto">
+          {loading ? (
+            <div className="flex flex-col justify-center items-center min-h-[40vh] gap-3">
+              <div className="w-10 h-10 border-4 border-bili-grayBg border-t-bili-blue rounded-full animate-spin"></div>
+              <span className="text-bili-textLight text-sm">正在加载中...</span>
             </div>
-
-            {/* 播放线路和剧集列表 */}
-            {playSources.length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6">
-                <div className="flex flex-wrap gap-2 mb-4 md:mb-6 border-b border-gray-100 pb-3 md:pb-4">
-                  {playSources.map((source, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setCurrentSourceIndex(index)}
-                      className={`px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium transition-colors ${
-                        currentSourceIndex === index
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {source.sourceName}
-                    </button>
-                  ))}
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
+              <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="error" className="w-48 mb-4 opacity-80" />
+              <p className="text-bili-text font-medium mb-1">{error}</p>
+            </div>
+          ) : detail ? (
+            <div className="space-y-8">
+              {/* 影片信息区域 */}
+              <div className="flex flex-col md:flex-row gap-6 lg:gap-10">
+                <div className="w-40 sm:w-48 lg:w-56 flex-shrink-0 mx-auto md:mx-0">
+                  <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-bili-grayBg shadow-md">
+                    <img 
+                      src={detail.vod_pic} 
+                      alt={detail.vod_name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x400?text=无封面'
+                      }}
+                    />
+                  </div>
                 </div>
                 
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 md:gap-3">
-                  {playSources[currentSourceIndex]?.episodes.map((ep, index) => (
-                    <button
-                      key={index}
-                      className="px-2 py-2 bg-gray-50 border border-gray-200 rounded text-xs md:text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors truncate text-center"
-                      title={ep.name}
-                      onClick={() => {
-                        console.log('Play episode:', ep.url)
-                        navigate(`/play/${siteKey}/${vodId}/${currentSourceIndex}/${index}`, {
-                          state: { detail, playSources }
-                        })
-                      }}
-                    >
-                      {ep.name}
-                    </button>
-                  ))}
+                <div className="flex-1 flex flex-col justify-center space-y-4">
+                  <div>
+                    <h2 className="text-2xl sm:text-3xl font-bold text-bili-text leading-tight mb-2">{detail.vod_name}</h2>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
+                      {detail.type_name && <span className="px-2 py-0.5 bg-bili-grayBg text-bili-textLight rounded">{detail.type_name}</span>}
+                      {detail.vod_year && <span className="text-bili-textLight">{detail.vod_year}</span>}
+                      {detail.vod_area && <span className="text-bili-textLight">{detail.vod_area}</span>}
+                      {detail.vod_remarks && <span className="text-bili-pink font-medium">{detail.vod_remarks}</span>}
+                    </div>
+                  </div>
+                  
+                  <div className="text-sm text-bili-textLight space-y-2">
+                    {detail.vod_director && <p><span className="text-bili-textMuted mr-3">导演</span><span className="text-bili-text">{detail.vod_director}</span></p>}
+                    {detail.vod_actor && <p><span className="text-bili-textMuted mr-3">主演</span><span className="text-bili-text leading-relaxed">{detail.vod_actor}</span></p>}
+                  </div>
+                  
+                  {detail.vod_content && (
+                    <div className="pt-2">
+                      <p className="text-sm text-bili-textLight leading-relaxed line-clamp-3 hover:line-clamp-none transition-all cursor-pointer" dangerouslySetInnerHTML={{ __html: detail.vod_content.replace(/<[^>]+>/g, '') }}></p>
+                    </div>
+                  )}
                 </div>
               </div>
-            )}
-          </div>
-        ) : null}
-      </div>
+
+              {/* 播放线路和剧集列表 */}
+              {playSources.length > 0 && (
+                <div className="pt-8 border-t border-bili-border">
+                  <div className="flex items-center gap-4 mb-6">
+                    <h3 className="text-lg font-bold text-bili-text">播放列表</h3>
+                    <div className="flex bg-bili-grayBg rounded-lg p-1 overflow-x-auto custom-scrollbar">
+                      {playSources.map((source, index) => (
+                        <button
+                          key={index}
+                          onClick={() => setCurrentSourceIndex(index)}
+                          className={`whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                            currentSourceIndex === index
+                              ? 'bg-white text-bili-blue shadow-sm'
+                              : 'text-bili-textLight hover:text-bili-text'
+                          }`}
+                        >
+                          {source.sourceName}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3">
+                    {playSources[currentSourceIndex]?.episodes.map((ep, index) => (
+                      <button
+                        key={index}
+                        className="px-3 py-2.5 bg-white border border-bili-border rounded-lg text-sm text-bili-text hover:border-bili-blue hover:text-bili-blue hover:bg-bili-blue/5 transition-all truncate text-center font-medium"
+                        title={ep.name}
+                        onClick={() => {
+                          navigate(`/play/${siteKey}/${vodId}/${currentSourceIndex}/${index}`, {
+                            state: { detail, playSources }
+                          })
+                        }}
+                      >
+                        {ep.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </main>
     </div>
   )
 }
