@@ -129,9 +129,11 @@ const Home: React.FC = () => {
       console.error("Home: Failed to load videos", err)
       const errorMsg = err instanceof Error ? err.message : '获取数据失败'
       
-      // 如果明确是 530（目标源 DNS 挂了或者防爬），记录提示但不阻断自动切换
+      // 如果明确是 530（目标源 DNS 挂了或者防爬）或超时，记录提示但不阻断自动切换
       if (errorMsg.includes('ProxyError: 530')) {
-        setError('该站点当前不可用（源服务器 DNS 解析失败或反代拦截），正在尝试下一个源...')
+        setError('该站点不可用（源服务器解析失败或被拦截），正在尝试下一个源...')
+      } else if (errorMsg.includes('RequestTimeout')) {
+        setError('该站点响应超时(>10s)，可能服务器已失效，正在尝试下一个源...')
       } else {
         setError(errorMsg)
       }

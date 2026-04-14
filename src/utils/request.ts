@@ -235,8 +235,12 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit & { 
     }
     clearTimeout(timeoutId)
     return { success: true, data: parsedData }
-  } catch (error) {
+  } catch (error: any) {
     clearTimeout(timeoutId)
+    // 处理 fetch 抛出的 AbortError（超时）
+    if (error?.name === 'AbortError' || String(error).includes('aborted')) {
+      return { success: false, error: 'RequestTimeout: 接口请求超时(10s)' }
+    }
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 };
