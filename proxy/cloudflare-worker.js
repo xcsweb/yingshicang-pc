@@ -1,8 +1,5 @@
 const ALLOWED_HOSTS = new Set([
-  'xn--i8sz35d1yr.top',
-  '盒子迷.top',
-  'tv.nxog.top',
-  'xn--4kq62z5rby2qupq9ub.top',
+  // 把这里清空，或者填入你想允许代理的域名（如果不填，则允许所有域名）
 ])
 
 const corsHeaders = {
