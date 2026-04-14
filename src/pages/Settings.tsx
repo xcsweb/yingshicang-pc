@@ -291,9 +291,7 @@ const createSpeedTester = (timeoutMs: number) => async (url: string): Promise<Sp
       
       let finalMs = asMs(start, safeNow())
       
-      // 如果是本地内置源（local://），直接读取没有网络延迟
-      // 为了测出真实的“请求第三方服务器”的速度，我们从配置里挑一个有代表性的 site 测速
-      if (url.startsWith('local://') && sites.length > 0) {
+      if (sites.length > 0) {
         const testSite = sites.find(isLikelyVideoSite) || sites[0]
         const apiUrl = testSite.api || testSite.url
         if (apiUrl && isHttpUrl(apiUrl)) {
@@ -302,9 +300,9 @@ const createSpeedTester = (timeoutMs: number) => async (url: string): Promise<Sp
             start = safeNow()
             const realResult = await fetchData<any>(listUrl, { signal: controller.signal, noCache: true })
             if (realResult.success && isUsableHomeResponse(realResult.data)) {
-               finalMs = asMs(start, safeNow())
+              finalMs = asMs(start, safeNow())
             } else {
-               return { status: 'fail', ms: finalMs, error: '内置源站点探测失败' }
+              return { status: 'fail', ms: finalMs, error: '站点探测失败' }
             }
           }
         }
@@ -396,6 +394,7 @@ const Settings: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [speedTesting, setSpeedTesting] = useState(false)
   const [speedResults, setSpeedResults] = useState<Record<string, SpeedTestResult>>({})
+  const [siteSpeedResults, setSiteSpeedResults] = useState<Record<string, SpeedTestResult>>({})
   const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null)
   const httpProxy = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
 
@@ -573,6 +572,12 @@ const Settings: React.FC = () => {
       for (const preset of PRESET_URLS) next[preset.url] = { status: 'testing' }
       return next
     })
+    setSiteSpeedResults(() => {
+      const next: Record<string, SpeedTestResult> = {}
+      const slice = sites.slice(0, Math.min(15, sites.length))
+      for (const s of slice) next[s.key] = { status: 'testing' }
+      return next
+    })
 
     const tester = createSpeedTester(8_000)
     const tasks = PRESET_URLS.map(p => async () => ({ url: p.url, result: await tester(p.url) }))
@@ -581,6 +586,40 @@ const Settings: React.FC = () => {
     const next: Record<string, SpeedTestResult> = {}
     for (const item of results) next[item.url] = item.result
     setSpeedResults(prev => ({ ...prev, ...next }))
+
+    const siteTester = async (site: Site): Promise<SpeedTestResult> => {
+      const apiUrl = (site.api || site.url || '').trim()
+      const listUrl = buildHomeListUrl(apiUrl)
+      if (!listUrl) return { status: 'fail', error: 'Invalid API' }
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 8_000)
+      const start = safeNow()
+      try {
+        const res = await fetchData<any>(listUrl, { signal: controller.signal, noCache: true })
+        const ms = asMs(start, safeNow())
+        if (!res.success) return { status: 'fail', ms, error: res.error || 'Failed' }
+        if (!isUsableHomeResponse(res.data)) return { status: 'fail', ms, error: 'Invalid response' }
+        return { status: 'ok', ms }
+      } catch (e: any) {
+        const ms = asMs(start, safeNow())
+        const message = e?.name === 'AbortError' ? 'Timeout' : (e?.message || 'Failed')
+        return { status: 'fail', ms, error: message }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
+    const slice = sites.slice(0, Math.min(15, sites.length))
+    if (slice.length) {
+      const siteTasks = slice.map(s => async () => ({ key: s.key, result: await siteTester(s) }))
+      const siteResults = await runPool(siteTasks, 3)
+      setSiteSpeedResults(prev => {
+        const merged = { ...prev }
+        for (const r of siteResults) merged[r.key] = r.result
+        return merged
+      })
+    }
+
     setSpeedTesting(false)
     return next
   }
@@ -847,8 +886,21 @@ const Settings: React.FC = () => {
                   {sites.map(site => (
                     <li key={site.key} className="p-3.5 hover:bg-bili-grayBg/50 flex justify-between items-center transition-colors">
                       <span className="font-medium text-bili-text text-sm truncate pr-4">{site.name}</span>
-                      <span className="flex-shrink-0 text-xs px-2.5 py-1 rounded-md bg-bili-grayBg text-bili-textLight border border-bili-border">
-                        {site.type === 3 ? '网盘/解析' : site.type === 1 ? 'XML' : site.type === 0 ? 'CMS' : `Type ${site.type}`}
+                      <span className="flex-shrink-0 flex items-center gap-2">
+                        {(() => {
+                          const r = siteSpeedResults[site.key]
+                          if (!r || r.status === 'idle') return null
+                          if (r.status === 'testing') {
+                            return <span className="text-xs text-bili-textMuted">测速中</span>
+                          }
+                          if (r.status === 'ok') {
+                            return <span className="text-xs text-bili-textMuted">{r.ms}ms</span>
+                          }
+                          return <span className="text-xs text-bili-pink">失败</span>
+                        })()}
+                        <span className="text-xs px-2.5 py-1 rounded-md bg-bili-grayBg text-bili-textLight border border-bili-border">
+                          {site.type === 3 ? '网盘/解析' : site.type === 1 ? 'XML' : site.type === 0 ? 'CMS' : `Type ${site.type}`}
+                        </span>
                       </span>
                     </li>
                   ))}
