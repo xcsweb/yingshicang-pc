@@ -1,5 +1,6 @@
 import time
 import re
+import os
 from playwright.sync_api import sync_playwright
 
 def test_full_flow():
@@ -15,7 +16,8 @@ def test_full_flow():
         print("Starting full flow test on Desktop (1280x720)...")
 
         # 1. Navigate to App
-        page.goto('http://localhost:4173/')
+        base_url = os.environ.get('BASE_URL', 'http://localhost:4173/')
+        page.goto(base_url)
         page.wait_for_load_state('domcontentloaded')
         
         # Wait a bit for React to render

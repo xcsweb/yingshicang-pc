@@ -4,6 +4,14 @@ import { useDataSourceStore, type Site } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 
 const PRESET_URLS = [
+  { name: '盒子迷-禁止贩卖', url: 'https://盒子迷.top/禁止贩卖' },
+  { name: '盒子迷-饭太硬', url: 'https://盒子迷.top/饭太硬' },
+  { name: '盒子迷-肥猫', url: 'https://盒子迷.top/肥猫' },
+  { name: '盒子迷-不良帅', url: 'https://盒子迷.top/不良帅' },
+  { name: '盒子迷-潇洒', url: 'https://盒子迷.top/潇洒' },
+  { name: '盒子迷-短剧', url: 'https://盒子迷.top/短剧' },
+  { name: '盒子迷-直播', url: 'https://盒子迷.top/ZB' },
+  { name: 'nxog', url: 'http://tv.nxog.top/' },
   { name: 'dxawi', url: 'https://dxawi.github.io/0/0.json' },
   { name: 'jyoketsu', url: 'https://cdn.jsdelivr.net/gh/jyoketsu/tv@main/m.json' },
 ]
@@ -187,6 +195,52 @@ const extractMappedUrlFromCopyPage = (pageUrl: string, html: string): string => 
   return ''
 }
 
+const extractCopyLinksFromHtml = (html: string): Array<{ name: string; url: string }> => {
+  if (!html) return []
+  const items: Array<{ name: string; url: string }> = []
+  const seen = new Set<string>()
+  const add = (name: string, url: string) => {
+    const n = (name || '').trim()
+    const u = (url || '').trim()
+    if (!n || !u) return
+    if (!/^https?:\/\//i.test(u)) return
+    const key = `${n}::${u}`
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push({ name: n, url: u })
+  }
+
+  {
+    const re = /copyLinkToClipboard\('([^']+)'\)[\s\S]*?>\s*([^<]+?)\s*<\/a>/g
+    for (;;) {
+      const m = re.exec(html)
+      if (!m) break
+      add(m[2], m[1])
+    }
+  }
+
+  {
+    const re = /data-clipboard-text\s*=\s*["']([^"']+)["'][\s\S]*?>\s*([^<]+?)\s*<\/a>/g
+    for (;;) {
+      const m = re.exec(html)
+      if (!m) break
+      add(m[2], m[1])
+    }
+  }
+
+  return items
+}
+
+const isLikelyLiveList = (text: string): boolean => {
+  const t = (text || '').trim()
+  if (!t) return false
+  if (/\#genre\#/i.test(t)) return true
+  if (/(^|,)\s*CCTV\d+/i.test(t)) return true
+  const hasHttp = /https?:\/\//i.test(t)
+  const looksLikeCsv = hasHttp && t.includes(',') && !t.includes('{') && !t.includes('[')
+  return looksLikeCsv
+}
+
 const runPool = async <T,>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> => {
   const safeLimit = Math.max(1, Math.floor(limit))
   const results: T[] = new Array(tasks.length)
@@ -326,15 +380,26 @@ const Settings: React.FC = () => {
     handleSave(url)
   }
 
-  const loadSitesFromUrl = async (url: string): Promise<Site[]> => {
+  const loadSitesFromUrl = async (url: string, depth = 0, visited?: Set<string>): Promise<Site[]> => {
     const normalized = normalizeUrl(url)
     if (!normalized || !isHttpUrl(normalized)) return []
+    const safeVisited = visited || new Set<string>()
+    if (safeVisited.has(normalized)) return []
+    safeVisited.add(normalized)
+
     const result = await fetchData<any>(normalized)
-    if (!result.success) return []
-    return extractSitesFromConfig(result.data)
+    if (result.success) return extractSitesFromConfig(result.data)
+    if (depth >= 2) return []
+
+    try {
+      const nextSites = await tryLoadMultiFromText(normalized, depth + 1, safeVisited)
+      return nextSites
+    } catch {
+      return []
+    }
   }
 
-  const tryLoadMultiFromText = async (url: string): Promise<Site[]> => {
+  const tryLoadMultiFromText = async (url: string, depth = 0, visited?: Set<string>): Promise<Site[]> => {
     const normalized = normalizeUrl(url)
     if (!normalized || !isHttpUrl(normalized)) return []
 
@@ -376,11 +441,64 @@ const Settings: React.FC = () => {
       return typeof json?.contents === 'string' ? json.contents : ''
     })()
     if (!contents) return []
+    if (isLikelyLiveList(contents)) {
+      throw new Error('该地址疑似直播源列表，当前仅支持影视站点配置')
+    }
 
     const mappedUrl = extractMappedUrlFromCopyPage(normalized, contents)
     if (mappedUrl) {
-      const mappedSites = await loadSitesFromUrl(mappedUrl)
+      const mappedSites = await loadSitesFromUrl(mappedUrl, depth, visited)
       if (mappedSites.length) return mappedSites
+    }
+
+    const copyLinks = extractCopyLinksFromHtml(contents)
+    if (copyLinks.length) {
+      let host = ''
+      try {
+        host = new URL(normalized).host
+      } catch {
+        host = ''
+      }
+      const targetName = (() => {
+        try {
+          const u = new URL(normalized)
+          const segs = u.pathname.split('/').filter(Boolean)
+          const last = segs.length ? segs[segs.length - 1] : ''
+          return last ? decodeURIComponent(last).trim() : ''
+        } catch {
+          return ''
+        }
+      })()
+      const normalizedTarget = targetName.replace(/\s+/g, '')
+
+      const score = (item: { name: string; url: string }): number => {
+        let s = 0
+        const n = item.name.replace(/\s+/g, '')
+        if (normalizedTarget && (n === normalizedTarget || n.includes(normalizedTarget))) s += 200
+        if (host) {
+          try {
+            if (new URL(item.url).host === host) s += 50
+          } catch {
+          }
+        }
+        const lower = item.url.toLowerCase()
+        if (lower.endsWith('.json')) s += 30
+        if (lower.includes('tvbox')) s += 20
+        if (lower.includes('box')) s += 10
+        return s
+      }
+
+      const candidates = [...copyLinks]
+        .sort((a, b) => score(b) - score(a))
+        .map(i => i.url)
+
+      const maxTry = Math.min(12, candidates.length)
+      for (let i = 0; i < maxTry; i++) {
+        const candidateUrl = candidates[i]
+        if (!candidateUrl || normalizeUrl(candidateUrl) === normalized) continue
+        const sites = await loadSitesFromUrl(candidateUrl, depth, visited)
+        if (sites.length) return sites
+      }
     }
 
     const rawLines = contents.split(/\r?\n/)
@@ -399,7 +517,7 @@ const Settings: React.FC = () => {
 
     setMultiProgress({ done: 0, total: urls.length })
     const tasks = urls.map(u => async () => {
-      const sites = await loadSitesFromUrl(u)
+      const sites = await loadSitesFromUrl(u, depth, visited)
       setMultiProgress(prev => (prev ? { ...prev, done: Math.min(prev.total, prev.done + 1) } : prev))
       return sites
     })
