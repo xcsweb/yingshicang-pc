@@ -412,10 +412,17 @@ const Play: React.FC = () => {
         fullscreenWeb: true,
         screenshot: true,
         mutex: true,
+        // 添加移动端专属优化
+        autoOrientation: true, 
+        fastForward: true, 
+        lock: true, 
         moreVideoAttr: {
           playsInline: true,
           preload: 'metadata',
-        },
+          'x5-video-player-type': 'h5',
+          'x5-video-player-fullscreen': 'true',
+          'x5-video-orientation': 'landscape',
+        } as any,
         type: useHlsJs ? 'm3u8' : '',
         settings: [
           {
@@ -573,7 +580,7 @@ const Play: React.FC = () => {
       art.controls.add({
         name: 'intro',
         position: 'left',
-        html: '<span style="font-size:12px;">片头</span>',
+        html: '<span class="hidden sm:inline-block" style="font-size:12px;">设片头</span><span class="sm:hidden" style="font-size:12px;">头</span>',
         click: () => {
           const prefsNow = loadPrefs()
           const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
@@ -589,7 +596,7 @@ const Play: React.FC = () => {
       art.controls.add({
         name: 'outro',
         position: 'left',
-        html: '<span style="font-size:12px;">片尾</span>',
+        html: '<span class="hidden sm:inline-block" style="font-size:12px;">设片尾</span><span class="sm:hidden" style="font-size:12px;">尾</span>',
         click: () => {
           const prefsNow = loadPrefs()
           const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
@@ -667,20 +674,20 @@ const Play: React.FC = () => {
           <p className="text-bili-text font-medium">{error}</p>
         </div>
       ) : (
-        <main className="flex-1 max-w-[1400px] mx-auto w-full p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6 lg:gap-8">
+        <main className="flex-1 max-w-[1400px] mx-auto w-full p-0 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-4 sm:gap-6 lg:gap-8">
           {/* Left: Player & Info */}
           <div className="flex-1 flex flex-col min-w-0">
-            <div className="bg-black rounded-xl overflow-hidden shadow-lg mb-4 aspect-video w-full">
+            <div className="bg-black sm:rounded-xl overflow-hidden shadow-lg sm:mb-4 aspect-video w-full relative z-10">
               <div className="relative w-full h-full">
                 <div ref={playerContainerRef} className="w-full h-full" />
                 {(playerLoading || playerError) && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
                     {playerError ? (
                       <span className="text-white text-sm px-4 text-center">{playerError}</span>
                     ) : (
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
-                        <span className="text-white text-sm">加载中...</span>
+                        <span className="text-white text-sm drop-shadow-md">加载中...</span>
                       </div>
                     )}
                   </div>
@@ -688,7 +695,7 @@ const Play: React.FC = () => {
               </div>
             </div>
             
-            <div className="mb-6">
+            <div className="mb-4 sm:mb-6 px-4 sm:px-0 pt-4 sm:pt-0">
               <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2">
                 {detail?.vod_name}
               </h1>
@@ -707,8 +714,8 @@ const Play: React.FC = () => {
           </div>
           
           {/* Right: Playlist */}
-          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col bg-bili-grayBg/30 rounded-xl border border-bili-border overflow-hidden h-fit max-h-[800px]">
-            <div className="p-4 border-b border-bili-border bg-white flex justify-between items-center">
+          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col bg-bili-grayBg/30 sm:rounded-xl sm:border border-t border-bili-border overflow-hidden h-fit max-h-[60vh] sm:max-h-[800px]">
+            <div className="p-4 border-b border-bili-border bg-white flex justify-between items-center sticky top-0 z-10">
               <h3 className="font-medium text-bili-text">视频选集</h3>
               <div className="flex items-center gap-2">
                 <button
