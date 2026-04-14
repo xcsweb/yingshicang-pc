@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
+import SmartImage from '../components/SmartImage'
 
 interface Episode {
   name: string
@@ -95,8 +96,7 @@ const Detail: React.FC = () => {
         const url = new URL(apiUrl)
         const params = new URLSearchParams(url.search)
         params.delete('ac')
-        params.append('ac', 'detail')
-        params.append('ac', 'videolist')
+        params.set('ac', 'detail')
         params.set('ids', vodId)
         url.search = params.toString()
         
@@ -170,7 +170,7 @@ const Detail: React.FC = () => {
             </div>
           ) : error ? (
             <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
-              <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="error" className="w-48 mb-4 opacity-80" />
+              <SmartImage alt="error" className="w-48 mb-4 opacity-80" fallbackText="加载失败" />
               <p className="text-bili-text font-medium mb-1">{error}</p>
             </div>
           ) : detail ? (
@@ -179,14 +179,7 @@ const Detail: React.FC = () => {
               <div className="flex flex-col md:flex-row gap-6 lg:gap-10">
                 <div className="w-40 sm:w-48 lg:w-56 flex-shrink-0 mx-auto md:mx-0">
                   <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-bili-grayBg shadow-md">
-                    <img 
-                      src={detail.vod_pic} 
-                      alt={detail.vod_name}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x400?text=无封面'
-                      }}
-                    />
+                    <SmartImage src={detail.vod_pic} alt={detail.vod_name} fallbackText={detail.vod_name} className="w-full h-full object-cover" />
                   </div>
                 </div>
                 

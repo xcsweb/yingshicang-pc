@@ -1,17 +1,300 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDataSourceStore, type Site } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 
 const PRESET_URLS = [
-  { name: '饭太硬', url: 'http://www.饭太硬.com/tv/' },
-  { name: '肥猫', url: 'http://肥猫.com' },
-  { name: '菜妮丝', url: 'https://tv.菜妮丝.top' },
-  { name: '巧技', url: 'http://cdn.qiaoji8.com/tvbox.json' },
-  { name: '春盈天下', url: 'https://盒子迷.top/春盈天下' },
-  { name: '王小二', url: 'http://tvbox.xn--4kq62z5rby2qupq9ub.top/' },
-  { name: '欧歌', url: 'http://tv.nxog.top' },
+  { name: 'dxawi', url: 'https://dxawi.github.io/0/0.json' },
+  { name: 'jyoketsu', url: 'https://cdn.jsdelivr.net/gh/jyoketsu/tv@main/m.json' },
 ]
+
+type SpeedTestStatus = 'idle' | 'testing' | 'ok' | 'fail'
+type SpeedTestResult = { status: SpeedTestStatus; ms?: number; error?: string; usefulSites?: number }
+
+type AnyObject = Record<string, any>
+
+const safeNow = (): number => {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now()
+  return Date.now()
+}
+
+const asMs = (start: number, end: number): number => Math.max(0, Math.round(end - start))
+
+const normalizeUrl = (raw: string): string => {
+  const input = (raw || '').trim()
+  if (!input) return ''
+  if (!/^https?:\/\//i.test(input)) return input
+  try {
+    return new URL(input).toString()
+  } catch {
+    return input
+  }
+}
+
+const isHttpUrl = (raw: string): boolean => {
+  const input = (raw || '').trim()
+  if (!input) return false
+  try {
+    const u = new URL(input)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const safeArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
+
+const isLikelyVideoSite = (site: Site): boolean => {
+  const name = (site?.name || '').trim()
+  const api = (site?.api || site?.url || '').trim()
+  if (!name || !api) return false
+  if (site.type !== 0 && site.type !== 1) return false
+  if (!isHttpUrl(api) && !api.includes('mock')) return false
+
+  const lowerApi = api.toLowerCase()
+  if (lowerApi.includes('csp_')) return false
+  if (!lowerApi.includes('api.php')) return false
+  if (!lowerApi.includes('provide')) return false
+  if (!lowerApi.includes('vod')) return false
+  if (/(^|[?&])at=xml\b/i.test(api)) return false
+  if (/at\/xml/i.test(lowerApi)) return false
+  return true
+}
+
+/**
+ * 计算配置里可用于首页的站点数量（尽量避免把仅蜘蛛/网盘类站点当成可用）
+ */
+const countUsefulSitesFromConfig = (data: any): number => {
+  const sites = extractSitesFromConfig(data)
+  if (!sites.length) return 0
+  const uniq = uniqSitesByKey(sites)
+  return uniq.filter(isLikelyVideoSite).length
+}
+
+const rankSite = (site: Site): number => {
+  let score = 0
+  if (site.searchable) score += 10
+  if (site.quickSearch) score += 5
+  if (site.filterable) score += 5
+  if (isLikelyVideoSite(site)) score += 50
+  return score
+}
+
+const logSitePick = (label: string, uniq: Site[], filtered: Site[]) => {
+  const pick = (sites: Site[]) =>
+    sites.slice(0, 5).map(s => ({ key: s.key, name: s.name, type: s.type, api: s.api || s.url, ext: s.ext }))
+  const types: Record<string, number> = {}
+  let httpCount = 0
+  for (const s of uniq) {
+    const k = String(s.type)
+    types[k] = (types[k] || 0) + 1
+    const api = (s.api || s.url || '').trim()
+    if (api && isHttpUrl(api)) httpCount += 1
+  }
+  console.log('Settings: sites picked', label, JSON.stringify({ total: uniq.length, filtered: filtered.length, httpCount, types, top: pick(filtered.length ? filtered : uniq) }))
+}
+
+const extractSitesFromConfig = (data: any): Site[] => {
+  if (!data) return []
+  if (Array.isArray(data)) {
+    const merged: Site[] = []
+    for (const item of data) merged.push(...extractSitesFromConfig(item))
+    return merged
+  }
+
+  const obj = data as AnyObject
+  const videoSites = safeArray<Site>(obj?.video?.sites)
+  if (videoSites.length) return videoSites
+  const sites = safeArray<Site>(obj?.sites)
+  if (sites.length) return sites
+  const urlsAsSites = safeArray<Site>(obj?.urls)
+  if (urlsAsSites.length) return urlsAsSites
+
+  const singleSite = obj?.sites && typeof obj.sites === 'object' && !Array.isArray(obj.sites) ? (obj.sites as Site) : null
+  if (singleSite?.key) return [singleSite]
+  const singleUrlSite = obj?.urls && typeof obj.urls === 'object' && !Array.isArray(obj.urls) ? (obj.urls as Site) : null
+  if (singleUrlSite?.key) return [singleUrlSite]
+
+  return []
+}
+
+const extractUrlListFromConfig = (data: any): string[] => {
+  if (!data) return []
+  if (Array.isArray(data)) return safeArray<string>(data).filter(isHttpUrl).map(normalizeUrl)
+  const obj = data as AnyObject
+
+  const urls = safeArray<any>(obj?.urls)
+  if (urls.length) {
+    if (typeof urls[0] === 'string') return urls.filter((s: any) => typeof s === 'string').filter(isHttpUrl).map(normalizeUrl)
+    if (typeof urls[0] === 'object') {
+      return urls.map((u: any) => u?.url).filter((s: any) => typeof s === 'string').filter(isHttpUrl).map(normalizeUrl)
+    }
+  }
+
+  const stores = safeArray<any>(obj?.stores)
+  if (stores.length) {
+    return stores.map((u: any) => u?.url).filter((s: any) => typeof s === 'string').filter(isHttpUrl).map(normalizeUrl)
+  }
+
+  return []
+}
+
+const uniqSitesByKey = (sites: Site[]): Site[] => {
+  const used = new Set<string>()
+  return sites.map((site, index) => {
+    const base = (site?.key || site?.name || `site_${index}`).trim()
+    let key = base || `site_${index}`
+    let suffix = 1
+    while (used.has(key)) {
+      key = `${base}_${suffix}`
+      suffix += 1
+    }
+    used.add(key)
+    return { ...site, key }
+  })
+}
+
+const extractMappedUrlFromCopyPage = (pageUrl: string, html: string): string => {
+  if (!pageUrl || !html) return ''
+  let targetName = ''
+  try {
+    const u = new URL(pageUrl)
+    const segs = u.pathname.split('/').filter(Boolean)
+    const last = segs.length ? segs[segs.length - 1] : ''
+    targetName = last ? decodeURIComponent(last).trim() : ''
+  } catch {
+    return ''
+  }
+  if (!targetName) return ''
+
+  const map = new Map<string, string>()
+  const re = /copyLinkToClipboard\('([^']+)'\)[\s\S]*?>\s*([^<]+?)\s*<\/a>/g
+  for (;;) {
+    const m = re.exec(html)
+    if (!m) break
+    const url = (m[1] || '').trim()
+    const name = (m[2] || '').trim()
+    if (url && name) map.set(name, url)
+  }
+
+  const exact = map.get(targetName)
+  if (exact) return exact
+  const compactTarget = targetName.replace(/\s+/g, '')
+  if (!compactTarget) return ''
+  for (const [name, url] of map.entries()) {
+    if (name.replace(/\s+/g, '') === compactTarget) return url
+  }
+  return ''
+}
+
+const runPool = async <T,>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> => {
+  const safeLimit = Math.max(1, Math.floor(limit))
+  const results: T[] = new Array(tasks.length)
+  let nextIndex = 0
+
+  const worker = async () => {
+    for (;;) {
+      const current = nextIndex
+      nextIndex += 1
+      if (current >= tasks.length) return
+      results[current] = await tasks[current]()
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(safeLimit, tasks.length) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
+const createSpeedTester = (timeoutMs: number) => async (url: string): Promise<SpeedTestResult> => {
+  if (!url) return { status: 'fail', error: 'Empty URL' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs))
+
+  const start = safeNow()
+  console.log('Settings: speed test start', url)
+  try {
+    const result = await fetchData<any>(normalizeUrl(url), { signal: controller.signal })
+    const ms = asMs(start, safeNow())
+    if (result.success) {
+      const usefulSites = countUsefulSitesFromConfig(result.data)
+      const siteCount = extractSitesFromConfig(result.data).length
+      const urlCount = extractUrlListFromConfig(result.data).length
+      if (siteCount > 0 || urlCount > 0) {
+      console.log('Settings: speed test ok', url, ms)
+      return { status: 'ok', ms, usefulSites }
+      }
+      console.log('Settings: speed test invalid config', url, ms)
+      return { status: 'fail', ms, error: 'Invalid config' }
+    }
+    console.log('Settings: speed test fail', url, ms, result.error)
+    return { status: 'fail', ms, error: result.error || 'Failed' }
+  } catch (err: any) {
+    const ms = asMs(start, safeNow())
+    const message = err?.name === 'AbortError' ? 'Timeout' : (err?.message || 'Failed')
+    console.log('Settings: speed test error', url, ms, message)
+    return { status: 'fail', ms, error: message }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 校验站点是否能用于首页（请求 ac=list，至少能返回 class 或 list）
+ */
+const isUsableHomeResponse = (data: any): boolean => {
+  const cls = data?.class
+  const lst = data?.list
+  if (Array.isArray(cls) && cls.length > 0) return true
+  if (Array.isArray(lst) && lst.length > 0) return true
+  return false
+}
+
+const buildHomeListUrl = (apiUrl: string): string => {
+  const raw = (apiUrl || '').trim()
+  if (!raw) return ''
+  if (!isHttpUrl(raw)) return ''
+  const url = new URL(raw)
+  url.searchParams.set('ac', 'list')
+  url.searchParams.delete('wd')
+  url.searchParams.delete('t')
+  url.searchParams.delete('pg')
+  url.searchParams.delete('ids')
+  return url.toString()
+}
+
+const verifySiteUsableForHome = async (site: Site, timeoutMs: number): Promise<boolean> => {
+  if (!isLikelyVideoSite(site)) return false
+  const apiUrl = (site.api || site.url || '').trim()
+  const listUrl = buildHomeListUrl(apiUrl)
+  if (!listUrl) return false
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs))
+  const start = safeNow()
+  console.log('Settings: verify site start', site.key, site.name, listUrl)
+  const result = await fetchData<any>(listUrl, { signal: controller.signal })
+  clearTimeout(timer)
+  const ms = asMs(start, safeNow())
+  if (!result.success) {
+    console.log('Settings: verify site fail', site.key, site.name, ms, result.error)
+    return false
+  }
+  const ok = isUsableHomeResponse(result.data)
+  console.log('Settings: verify site done', site.key, site.name, ms, ok)
+  return ok
+}
+
+const pickVerifiedSites = async (candidates: Site[]): Promise<Site[]> => {
+  const maxCheck = Math.min(10, candidates.length)
+  if (maxCheck <= 0) return []
+  const slice = candidates.slice(0, maxCheck)
+  const tasks = slice.map(s => async () => ({ site: s, ok: await verifySiteUsableForHome(s, 6_000) }))
+  const results = await runPool(tasks, 2)
+  const verified = results.filter(r => r.ok).map(r => r.site)
+  console.log('Settings: verified sites', JSON.stringify({ checked: slice.length, ok: verified.length, top: verified.slice(0, 5).map(s => ({ key: s.key, name: s.name, api: s.api || s.url })) }))
+  return verified
+}
 
 const Settings: React.FC = () => {
   const navigate = useNavigate()
@@ -20,10 +303,165 @@ const Settings: React.FC = () => {
   const [inputUrl, setInputUrl] = useState(storedUrl || PRESET_URLS[0].url)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [speedTesting, setSpeedTesting] = useState(false)
+  const [speedResults, setSpeedResults] = useState<Record<string, SpeedTestResult>>({})
+  const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null)
+
+  const fastestPreset = useMemo(() => {
+    let bestUrl = ''
+    let bestMs = Number.POSITIVE_INFINITY
+    for (const preset of PRESET_URLS) {
+      const r = speedResults[preset.url]
+      if (!r || r.status !== 'ok' || typeof r.ms !== 'number') continue
+      if (r.ms < bestMs) {
+        bestMs = r.ms
+        bestUrl = preset.url
+      }
+    }
+    return bestUrl ? { url: bestUrl, ms: bestMs } : null
+  }, [speedResults])
 
   const handlePresetClick = (url: string) => {
     setInputUrl(url)
     handleSave(url)
+  }
+
+  const loadSitesFromUrl = async (url: string): Promise<Site[]> => {
+    const normalized = normalizeUrl(url)
+    if (!normalized || !isHttpUrl(normalized)) return []
+    const result = await fetchData<any>(normalized)
+    if (!result.success) return []
+    return extractSitesFromConfig(result.data)
+  }
+
+  const tryLoadMultiFromText = async (url: string): Promise<Site[]> => {
+    const normalized = normalizeUrl(url)
+    if (!normalized || !isHttpUrl(normalized)) return []
+
+    const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
+    const contents = await (async () => {
+      if (useLocalProxy) {
+        const response = await fetch(`/proxy?ua=tvbox&url=${encodeURIComponent(normalized)}`)
+        if (!response.ok) return ''
+        const decode = (buffer: ArrayBuffer, encoding: string): string => {
+          try {
+            return new TextDecoder(encoding).decode(buffer)
+          } catch {
+            return new TextDecoder('utf-8').decode(buffer)
+          }
+        }
+        const countReplacement = (s: string): number => {
+          let n = 0
+          for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 0xfffd) n += 1
+          return n
+        }
+        const countPrivateUse = (s: string): number => {
+          let n = 0
+          for (let i = 0; i < s.length; i++) {
+            const code = s.charCodeAt(i)
+            if (code >= 0xe000 && code <= 0xf8ff) n += 1
+          }
+          return n
+        }
+        const buffer = await response.arrayBuffer()
+        const utf8 = decode(buffer, 'utf-8')
+        const replacementCount = countReplacement(utf8)
+        const privateUseCount = countPrivateUse(utf8)
+        return replacementCount >= 10 || privateUseCount >= 10 ? decode(buffer, 'gb18030') : utf8
+      }
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(normalized)}`
+      const response = await fetch(proxyUrl)
+      if (!response.ok) return ''
+      const json = (await response.json()) as AnyObject
+      return typeof json?.contents === 'string' ? json.contents : ''
+    })()
+    if (!contents) return []
+
+    const mappedUrl = extractMappedUrlFromCopyPage(normalized, contents)
+    if (mappedUrl) {
+      const mappedSites = await loadSitesFromUrl(mappedUrl)
+      if (mappedSites.length) return mappedSites
+    }
+
+    const rawLines = contents.split(/\r?\n/)
+    const urls = rawLines
+      .map(l => l.trim())
+      .filter(Boolean)
+      .filter(l => !l.startsWith('#') && !l.startsWith('//'))
+      .map(l => {
+        const parts = l.split(/[,\s$]+/).filter(Boolean)
+        const candidate = parts.length ? parts[parts.length - 1] : ''
+        return normalizeUrl(candidate)
+      })
+      .filter(isHttpUrl)
+
+    if (!urls.length) return []
+
+    setMultiProgress({ done: 0, total: urls.length })
+    const tasks = urls.map(u => async () => {
+      const sites = await loadSitesFromUrl(u)
+      setMultiProgress(prev => (prev ? { ...prev, done: Math.min(prev.total, prev.done + 1) } : prev))
+      return sites
+    })
+    const results = await runPool(tasks, 3)
+    setMultiProgress(null)
+    return results.flat()
+  }
+
+  const runSpeedTestAll = async (): Promise<Record<string, SpeedTestResult> | null> => {
+    if (speedTesting || loading) return null
+
+    setSpeedTesting(true)
+    setSpeedResults(prev => {
+      const next: Record<string, SpeedTestResult> = { ...prev }
+      for (const preset of PRESET_URLS) next[preset.url] = { status: 'testing' }
+      return next
+    })
+
+    const tester = createSpeedTester(8_000)
+    const tasks = PRESET_URLS.map(p => async () => ({ url: p.url, result: await tester(p.url) }))
+    const results = await runPool(tasks, 3)
+
+    const next: Record<string, SpeedTestResult> = {}
+    for (const item of results) next[item.url] = item.result
+    setSpeedResults(prev => ({ ...prev, ...next }))
+    setSpeedTesting(false)
+    return next
+  }
+
+  const pickFastestAndSave = async () => {
+    if (speedTesting || loading) return
+
+    const hasAnyOk = PRESET_URLS.some(p => speedResults[p.url]?.status === 'ok')
+    const latest = hasAnyOk ? null : await runSpeedTestAll()
+    const base = latest ? { ...speedResults, ...latest } : speedResults
+
+    const best = (() => {
+      let bestUrl = ''
+      let bestMs = Number.POSITIVE_INFINITY
+      const pick = (onlyUseful: boolean) => {
+        bestUrl = ''
+        bestMs = Number.POSITIVE_INFINITY
+        for (const preset of PRESET_URLS) {
+          const r = base[preset.url]
+          if (!r || r.status !== 'ok' || typeof r.ms !== 'number') continue
+          if (onlyUseful && (!r.usefulSites || r.usefulSites <= 0)) continue
+          if (r.ms < bestMs) {
+            bestMs = r.ms
+            bestUrl = preset.url
+          }
+        }
+        return bestUrl
+      }
+      const useful = pick(true)
+      if (useful) return useful
+      const anyOk = pick(false)
+      return anyOk ? anyOk : ''
+    })()
+
+    if (!best) return
+    setInputUrl(best)
+    await handleSave(best)
   }
 
   const handleSave = async (urlToSave?: any) => {
@@ -34,7 +472,8 @@ const Settings: React.FC = () => {
     setError(null)
     
     try {
-      console.log("Settings: fetching data from", targetUrl)
+      const normalizedTargetUrl = normalizeUrl(targetUrl)
+      console.log("Settings: fetching data from", normalizedTargetUrl)
       if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && targetUrl === 'http://mock.api') {
           console.log("Settings: Setting local mock data")
           setUrl(targetUrl)
@@ -43,25 +482,69 @@ const Settings: React.FC = () => {
           return
       }
       
-      const result = await fetchData<{ sites?: Site[], urls?: Site[] }>(targetUrl)
+      const result = await fetchData<any>(normalizedTargetUrl)
       console.log("Settings: fetch result", result)
-      
-      if (result.success && result.data && Array.isArray(result.data.sites)) {
-        setUrl(targetUrl)
-        setSites(result.data.sites)
-      } else if (result.success && result.data && result.data.sites) {
-        setUrl(targetUrl)
-        setSites(Array.isArray(result.data.sites) ? result.data.sites : [result.data.sites])
-      } else if (result.success && result.data && Array.isArray(result.data.urls)) {
-        setUrl(targetUrl)
-        setSites(result.data.urls)
-      } else {
+
+      if (!result.success) {
+        const multiSites = await tryLoadMultiFromText(normalizedTargetUrl)
+        if (multiSites.length) {
+          setUrl(normalizedTargetUrl)
+          const uniq = uniqSitesByKey(multiSites)
+          const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
+          logSitePick('multi-text', uniq, filtered)
+          if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+          const verified = await pickVerifiedSites(filtered)
+          if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+          setSites(verified)
+          return
+        }
         throw new Error(result.error || '解析数据源失败')
       }
+
+      const data = result.data
+      const directSites = extractSitesFromConfig(data)
+      if (directSites.length) {
+        setUrl(normalizedTargetUrl)
+        const uniq = uniqSitesByKey(directSites)
+        const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
+        logSitePick('direct', uniq, filtered)
+        if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+        const verified = await pickVerifiedSites(filtered)
+        if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+        setSites(verified)
+        return
+      }
+
+      const urlList = extractUrlListFromConfig(data)
+      if (urlList.length) {
+        setMultiProgress({ done: 0, total: urlList.length })
+        const tasks = urlList.map(u => async () => {
+          const sites = await loadSitesFromUrl(u)
+          setMultiProgress(prev => (prev ? { ...prev, done: Math.min(prev.total, prev.done + 1) } : prev))
+          return sites
+        })
+        const results = await runPool(tasks, 3)
+        setMultiProgress(null)
+        const merged = results.flat()
+        if (merged.length) {
+          setUrl(normalizedTargetUrl)
+          const uniq = uniqSitesByKey(merged)
+          const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
+          logSitePick('multi-json', uniq, filtered)
+          if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+          const verified = await pickVerifiedSites(filtered)
+          if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+          setSites(verified)
+          return
+        }
+      }
+      
+      throw new Error('解析数据源失败')
     } catch (err: any) {
       setError(err.message)
     } finally {
       setLoading(false)
+      setMultiProgress(null)
     }
   }
 
@@ -114,11 +597,36 @@ const Settings: React.FC = () => {
                     ) : '保存并加载'}
                   </button>
                 </div>
+                {multiProgress && (
+                  <p className="text-bili-textLight text-xs mt-2">
+                    正在加载多仓：{multiProgress.done}/{multiProgress.total}
+                  </p>
+                )}
                 {error && <p className="text-bili-pink text-sm mt-2 flex items-center gap-1"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>{error}</p>}
               </div>
               
               <div>
-                <span className="block text-sm font-medium text-bili-text mb-3">推荐源一键配置</span>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <span className="block text-sm font-medium text-bili-text">推荐源一键配置</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={runSpeedTestAll}
+                      disabled={loading || speedTesting}
+                      className="px-3 py-1.5 text-xs rounded-md border border-bili-border bg-white text-bili-textLight hover:text-bili-blue hover:border-bili-blue/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {speedTesting ? '测速中...' : '一键测速'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={pickFastestAndSave}
+                      disabled={loading || speedTesting}
+                      className="px-3 py-1.5 text-xs rounded-md bg-bili-blue text-white hover:bg-bili-blueHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      一键选最快
+                    </button>
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-2.5">
                   {PRESET_URLS.map((preset) => (
                     <button
@@ -131,10 +639,24 @@ const Settings: React.FC = () => {
                           : 'border-bili-border bg-white text-bili-textLight hover:text-bili-blue hover:border-bili-blue/50'
                       }`}
                     >
-                      {preset.name}
+                      <span className="inline-flex items-center gap-2">
+                        <span>{preset.name}</span>
+                        {(() => {
+                          const r = speedResults[preset.url]
+                          if (!r || r.status === 'idle') return null
+                          if (r.status === 'testing') return <span className="text-xs text-bili-textMuted">测速中</span>
+                          if (r.status === 'ok') return <span className="text-xs text-bili-textMuted">{r.ms}ms{typeof r.usefulSites === 'number' ? ` · 可用${r.usefulSites}` : ''}</span>
+                          return <span className="text-xs text-bili-pink">失败</span>
+                        })()}
+                      </span>
                     </button>
                   ))}
                 </div>
+                {fastestPreset && (
+                  <div className="mt-3 text-xs text-bili-textLight">
+                    当前最快：{PRESET_URLS.find(p => p.url === fastestPreset.url)?.name || '未知'}（{fastestPreset.ms}ms）
+                  </div>
+                )}
               </div>
             </div>
           </div>

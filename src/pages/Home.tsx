@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
+import SmartImage from '../components/SmartImage'
 
 interface Category {
   type_id: string | number
@@ -66,17 +67,32 @@ const Home: React.FC = () => {
       if (!apiUrl) throw new Error('Invalid site API')
 
       if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && site.key === 'mock1') {
-        const mockData = {
-          class: [{ type_id: 1, type_name: "电影" }, { type_id: 2, type_name: "电视剧" }, { type_id: 3, type_name: "综艺" }, { type_id: 4, type_name: "动漫" }],
-          list: Array.from({ length: 24 }).map((_, i) => ({
-            vod_id: i + 1, 
-            vod_name: `测试影片内容 ${i + 1}`, 
-            vod_pic: `https://picsum.photos/seed/${i+1}/300/400`, 
-            vod_remarks: "HD"
-          }))
-        }
-        setCategories(mockData.class)
-        setVideos(mockData.list)
+        const mockCategories: Category[] = [
+          { type_id: 1, type_name: "电影" },
+          { type_id: 2, type_name: "电视剧" },
+          { type_id: 3, type_name: "综艺" },
+          { type_id: 4, type_name: "动漫" },
+        ]
+
+        const allVideos = Array.from({ length: 24 }).map((_, i) => {
+          const typeId = (i % mockCategories.length) + 1
+          return {
+            vod_id: i + 1,
+            vod_name: `测试${mockCategories[typeId - 1].type_name}内容 ${i + 1}`,
+            vod_pic: `https://picsum.photos/seed/${i + 1}/300/400`,
+            vod_remarks: "HD",
+            __type_id: typeId,
+          }
+        })
+
+        const filteredVideos = searchKeyword
+          ? allVideos.filter(v => v.vod_name.includes(searchKeyword))
+          : categoryId
+            ? allVideos.filter(v => String(v.__type_id) === String(categoryId))
+            : allVideos
+
+        setCategories(mockCategories)
+        setVideos(filteredVideos.map(({ __type_id: _typeId, ...rest }) => rest))
         setLoading(false)
         return true
       }
@@ -96,12 +112,15 @@ const Home: React.FC = () => {
       if (!response.success) throw new Error(response.error || '请求失败')
       
       const data = response.data
-      if (data?.class && !categoryId && !searchKeyword) {
-        setCategories(Array.isArray(data.class) ? data.class : [])
+      const nextCategories = data?.class && Array.isArray(data.class) ? data.class : []
+      if (!categoryId && !searchKeyword) {
+        setCategories(nextCategories)
       }
-      
-      setVideos(data?.list && Array.isArray(data.list) ? data.list : [])
-      return true
+
+      const nextVideos = data?.list && Array.isArray(data.list) ? data.list : []
+      setVideos(nextVideos)
+
+      return nextCategories.length > 0 || nextVideos.length > 0
     } catch (err: unknown) {
       console.error("Home: Failed to load videos", err)
       setError(err instanceof Error ? err.message : '获取数据失败')
@@ -143,6 +162,9 @@ const Home: React.FC = () => {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     if (!currentSiteKey) return
+    setLoading(true)
+    setError(null)
+    setVideos([])
     setKeyword(searchInput)
     setCurrentCategory('')
   }
@@ -274,6 +296,10 @@ const Home: React.FC = () => {
         <div className="flex overflow-x-auto px-4 sm:px-6 py-2 gap-6 custom-scrollbar text-sm">
            <button
              onClick={() => {
+               if (currentCategory === '' && !keyword) return
+               setLoading(true)
+               setError(null)
+               setVideos([])
                setCurrentCategory('')
                setKeyword('')
                setSearchInput('')
@@ -293,6 +319,10 @@ const Home: React.FC = () => {
              <button
                key={cat.type_id}
                onClick={() => {
+                 if (String(currentCategory) === String(cat.type_id) && !keyword) return
+                 setLoading(true)
+                 setError(null)
+                 setVideos([])
                  setCurrentCategory(cat.type_id)
                  setKeyword('')
                  setSearchInput('')
@@ -321,7 +351,7 @@ const Home: React.FC = () => {
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
-            <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="error" className="w-48 mb-4 opacity-80" />
+            <SmartImage alt="error" className="w-48 mb-4 opacity-80" fallbackText="加载失败" />
             <p className="text-bili-text font-medium mb-1">{error}</p>
             <p className="text-bili-textLight text-sm mb-6">该站点可能无法访问或接口格式不支持</p>
             <button 
@@ -333,7 +363,7 @@ const Home: React.FC = () => {
           </div>
         ) : videos.length === 0 ? (
           <div className="flex flex-col justify-center items-center min-h-[40vh]">
-            <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="nodata" className="w-48 mb-4 opacity-80" />
+            <SmartImage alt="nodata" className="w-48 mb-4 opacity-80" fallbackText="暂无数据" />
             <p className="text-bili-textLight text-sm">什么都没有找到呢~</p>
           </div>
         ) : (
@@ -345,13 +375,11 @@ const Home: React.FC = () => {
                 className="group cursor-pointer flex flex-col"
               >
                 <div className="relative aspect-[3/4] w-full rounded-xl overflow-hidden bg-bili-grayBg mb-2">
-                  <img 
-                    src={video.vod_pic} 
+                  <SmartImage
+                    src={video.vod_pic}
                     alt={video.vod_name}
+                    fallbackText={video.vod_name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x400?text=无封面'
-                    }}
                   />
                   {video.vod_remarks && (
                     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-6 pb-1.5 px-2">

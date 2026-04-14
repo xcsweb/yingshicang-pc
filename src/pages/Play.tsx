@@ -4,6 +4,8 @@ import Artplayer from 'artplayer'
 import Hls from 'hls.js'
 import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
+import SmartImage from '../components/SmartImage'
+type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
   name: string
@@ -22,6 +24,191 @@ interface VideoDetail {
   vod_play_from?: string
   vod_play_url?: string
   vod_remarks?: string
+}
+
+type DecoderMode = 'auto' | 'hlsjs' | 'native'
+type SkipMarks = { introEnd?: number; outroStart?: number }
+type EpisodeOrder = 'asc' | 'desc'
+
+type PlayerPrefsV1 = {
+  version: 1
+  decoder: DecoderMode
+  aspectRatio: AspectRatio
+  autoNext: boolean
+  episodeOrder: EpisodeOrder
+  marksByKey: Record<string, SkipMarks>
+}
+
+const PREFS_KEY = 'yingshicang-pc:playerPrefs:v1'
+
+const isHttpUrl = (raw: string): boolean => {
+  if (!raw) return false
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return false
+  }
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+}
+
+const pad2 = (v: number): string => String(Math.max(0, Math.floor(v))).padStart(2, '0')
+
+const formatSec = (sec: number): string => {
+  const s = Math.max(0, Math.floor(sec))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = s % 60
+  if (h > 0) return `${pad2(h)}:${pad2(m)}:${pad2(ss)}`
+  return `${pad2(m)}:${pad2(ss)}`
+}
+
+const clampNumber = (v: unknown, min: number, max: number, fallback: number): number => {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return fallback
+  if (n < min) return min
+  if (n > max) return max
+  return n
+}
+
+const safeJsonParse = (text: string): any => {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+const loadPrefs = (): PlayerPrefsV1 => {
+  const defaults: PlayerPrefsV1 = {
+    version: 1,
+    decoder: 'auto',
+    aspectRatio: 'default',
+    autoNext: true,
+    episodeOrder: 'asc',
+    marksByKey: {},
+  }
+  if (typeof window === 'undefined') return defaults
+  const raw = window.localStorage.getItem(PREFS_KEY) || ''
+  const obj = safeJsonParse(raw)
+  if (!obj || obj.version !== 1) return defaults
+  return {
+    version: 1,
+    decoder: obj.decoder === 'hlsjs' || obj.decoder === 'native' || obj.decoder === 'auto' ? obj.decoder : defaults.decoder,
+    aspectRatio: typeof obj.aspectRatio === 'string' ? (obj.aspectRatio as AspectRatio) : defaults.aspectRatio,
+    autoNext: typeof obj.autoNext === 'boolean' ? obj.autoNext : defaults.autoNext,
+    episodeOrder: obj.episodeOrder === 'desc' || obj.episodeOrder === 'asc' ? obj.episodeOrder : defaults.episodeOrder,
+    marksByKey: typeof obj.marksByKey === 'object' && obj.marksByKey ? obj.marksByKey : {},
+  }
+}
+
+const savePrefs = (prefs: PlayerPrefsV1): void => {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
+}
+
+const isLikelyHlsUrl = (raw: string): boolean => {
+  if (!raw) return false
+  const lower = raw.toLowerCase()
+  if (lower.includes('.m3u8')) return true
+  if (lower.includes('m3u8')) return true
+  return false
+}
+
+const toProxyUrl = (raw: string): string => {
+  const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
+  if (useLocalProxy) return `/proxy?ua=tvbox&url=${encodeURIComponent(raw)}`
+  return `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`
+}
+
+const getMarkKey = (siteKey: string, vodId: string | number, sourceIndex: number): string => `${siteKey}|${vodId}|${sourceIndex}`
+
+const getMarks = (prefs: PlayerPrefsV1, key: string): SkipMarks => {
+  const marks = prefs.marksByKey?.[key]
+  if (!marks) return {}
+  const introEnd = clampNumber(marks.introEnd, 0, 24 * 3600, 0)
+  const outroStart = clampNumber(marks.outroStart, 0, 24 * 3600, 0)
+  const normalized: SkipMarks = {}
+  if (introEnd > 0) normalized.introEnd = introEnd
+  if (outroStart > 0) normalized.outroStart = outroStart
+  return normalized
+}
+
+const setMarks = (prefs: PlayerPrefsV1, key: string, marks: SkipMarks): PlayerPrefsV1 => {
+  const next: PlayerPrefsV1 = {
+    ...prefs,
+    marksByKey: { ...(prefs.marksByKey || {}) },
+  }
+  next.marksByKey[key] = { ...marks }
+  return next
+}
+
+/**
+ * 通过响应头/内容片段判断是否为 m3u8（避免某些播放地址不带 m3u8 后缀导致误判）
+ */
+const detectStreamKind = async (raw: string): Promise<'hls' | 'direct'> => {
+  if (!raw) return 'direct'
+  if (isLikelyHlsUrl(raw)) return 'hls'
+  if (!isHttpUrl(raw)) return 'direct'
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5_000)
+  try {
+    const res = await fetch(toProxyUrl(raw), {
+      method: 'GET',
+      headers: { Range: 'bytes=0-2047' },
+      signal: controller.signal,
+    })
+    if (!res.ok) return 'direct'
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) return 'hls'
+    const buf = await res.arrayBuffer()
+    const text = new TextDecoder('utf-8').decode(buf).trimStart()
+    if (text.startsWith('#EXTM3U')) return 'hls'
+    return 'direct'
+  } catch {
+    return 'direct'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 处理「分享页」类播放地址：页面内通常会给出 main = "/xxx/index.m3u8?sign=..."
+ */
+const resolvePlayableUrl = async (raw: string): Promise<string> => {
+  if (!raw) return ''
+  if (!isHttpUrl(raw)) return raw
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return raw
+  }
+
+  const isShare = u.pathname.startsWith('/share/')
+  if (!isShare) return raw
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5_000)
+  try {
+    const res = await fetch(toProxyUrl(raw), { signal: controller.signal })
+    if (!res.ok) return raw
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (!ct.includes('text/html')) return raw
+    const html = await res.text()
+    const m = html.match(/var\s+main\s*=\s*['"]([^'"]+)['"]/i)
+    const main = (m?.[1] || '').trim()
+    if (!main) return raw
+    const resolved = main.startsWith('http') ? main : new URL(main, u.origin).toString()
+    console.log('Play: resolved share url', raw, '=>', resolved)
+    return resolved
+  } catch {
+    return raw
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 const Play: React.FC = () => {
@@ -44,8 +231,12 @@ const Play: React.FC = () => {
   const [loading, setLoading] = useState(!location.state?.detail)
   const [error, setError] = useState<string | null>(null)
   
-  const artRef = useRef<HTMLDivElement>(null)
-  const playerRef = useRef<Artplayer | null>(null)
+  const playerContainerRef = useRef<HTMLDivElement>(null)
+  const artRef = useRef<any>(null)
+  const hlsRef = useRef<Hls | null>(null)
+  const [playerLoading, setPlayerLoading] = useState(false)
+  const [playerError, setPlayerError] = useState<string | null>(null)
+  const [episodeOrder, setEpisodeOrder] = useState<EpisodeOrder>(() => loadPrefs().episodeOrder)
 
   useEffect(() => {
     if (detail) return
@@ -106,8 +297,7 @@ const Play: React.FC = () => {
         const url = new URL(apiUrl)
         const params = new URLSearchParams(url.search)
         params.delete('ac')
-        params.append('ac', 'detail')
-        params.append('ac', 'videolist')
+        params.set('ac', 'detail')
         params.set('ids', vodId)
         url.search = params.toString()
         
@@ -156,71 +346,289 @@ const Play: React.FC = () => {
   }, [siteKey, vodId, sites, detail])
 
   useEffect(() => {
-    if (!playSources.length || !artRef.current) return
-
     const source = playSources[currentSourceIndex]
     if (!source) return
     const episode = source.episodes[currentEpisodeIndex]
     if (!episode) return
+    if (!playerContainerRef.current) return
 
-    const playM3u8 = (video: HTMLMediaElement, url: string, art: any) => {
-      if (Hls.isSupported()) {
-        if (art.hls) art.hls.destroy()
-        const hls = new Hls()
-        hls.loadSource(url)
-        hls.attachMedia(video)
-        art.hls = hls
-        art.on('destroy', () => hls.destroy())
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url
-      } else {
-        art.notice.show = 'Unsupported playback format: m3u8'
+    setPlayerLoading(true)
+    setPlayerError(null)
+
+    if (artRef.current) {
+      artRef.current.destroy(false)
+      artRef.current = null
+    }
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    const safeUrl = episode.url?.trim()
+    if (!safeUrl || !isHttpUrl(safeUrl)) {
+      setPlayerLoading(false)
+      setPlayerError('播放地址无效')
+      return
+    }
+
+    let cancelled = false
+    const start = async () => {
+      const playUrl = await resolvePlayableUrl(safeUrl)
+      if (cancelled) return
+      const kind = await detectStreamKind(playUrl)
+      if (cancelled) return
+      const container = playerContainerRef.current
+      if (!container) return
+      container.innerHTML = ''
+
+      const isHls = kind === 'hls'
+      const prefs = loadPrefs()
+      const markKey = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
+      const marks = getMarks(prefs, markKey)
+      const canNativeHls =
+        typeof document !== 'undefined' &&
+        typeof document.createElement === 'function' &&
+        document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== ''
+
+      const preferNative = prefs.decoder === 'native' || (prefs.decoder === 'auto' && canNativeHls)
+      const useHlsJs = isHls && (prefs.decoder === 'hlsjs' || (prefs.decoder === 'auto' && !preferNative))
+      const initUrl = useHlsJs ? playUrl : toProxyUrl(playUrl)
+
+      const art = new Artplayer({
+        container,
+        url: initUrl,
+        autoplay: true,
+        autoSize: true,
+        setting: true,
+        playbackRate: true,
+        hotkey: true,
+        pip: true,
+        fullscreen: true,
+        fullscreenWeb: true,
+        screenshot: true,
+        mutex: true,
+        aspectRatio: true,
+        moreVideoAttr: {
+          playsInline: true,
+          preload: 'metadata',
+        },
+        type: useHlsJs ? 'm3u8' : '',
+        settings: [
+          {
+            name: 'decoder',
+            html: '解码器',
+            selector: [
+              { html: '自动', decoder: 'auto', default: prefs.decoder === 'auto' },
+              { html: 'Hls.js', decoder: 'hlsjs', default: prefs.decoder === 'hlsjs' },
+              { html: '原生', decoder: 'native', default: prefs.decoder === 'native' },
+            ],
+            onSelect: (_item, _el, _event) => {
+              const decoder = String((_item as any)?.decoder || '').toLowerCase()
+              if (decoder !== 'auto' && decoder !== 'hlsjs' && decoder !== 'native') return
+              const next = { ...prefs, decoder } as PlayerPrefsV1
+              savePrefs(next)
+              const nextPreferNative = decoder === 'native' || (decoder === 'auto' && canNativeHls)
+              const nextUseHlsJs = isHls && (decoder === 'hlsjs' || (decoder === 'auto' && !nextPreferNative))
+              if (hlsRef.current) {
+                hlsRef.current.destroy()
+                hlsRef.current = null
+              }
+              art.type = nextUseHlsJs ? 'm3u8' : ''
+              art.switchUrl(nextUseHlsJs ? playUrl : toProxyUrl(playUrl))
+              art.notice.show = `解码器：${decoder === 'hlsjs' ? 'Hls.js' : decoder === 'native' ? '原生' : '自动'}`
+            },
+          },
+          {
+            name: 'aspectRatio',
+            html: '画面比例',
+            selector: [
+              { html: '默认', ratio: 'default', default: prefs.aspectRatio === 'default' },
+              { html: '16:9', ratio: '16:9', default: prefs.aspectRatio === '16:9' },
+              { html: '4:3', ratio: '4:3', default: prefs.aspectRatio === '4:3' },
+              { html: '1:1', ratio: '1:1', default: prefs.aspectRatio === '1:1' },
+              { html: '21:9', ratio: '21:9', default: prefs.aspectRatio === '21:9' },
+            ],
+            onSelect: (_item) => {
+              const ratio = String((_item as any)?.ratio || '').trim() as AspectRatio
+              if (!ratio) return
+              art.aspectRatio = ratio
+              const next = { ...prefs, aspectRatio: ratio } as PlayerPrefsV1
+              savePrefs(next)
+              art.notice.show = `画面比例：${ratio === 'default' ? '默认' : ratio}`
+            },
+          },
+          {
+            name: 'autoNext',
+            html: '连播',
+            switch: true,
+            default: Boolean(prefs.autoNext),
+            onSwitch: (item) => {
+              const on = Boolean(item?.switch)
+              const next = { ...prefs, autoNext: on } as PlayerPrefsV1
+              savePrefs(next)
+              art.notice.show = on ? '连播：开启' : '连播：关闭'
+            },
+          },
+          {
+            name: 'introMark',
+            html: `片头：${marks.introEnd ? formatSec(marks.introEnd) : '--'}`,
+            onClick: () => {
+              const nextMarks = { ...marks, introEnd: undefined }
+              const next = setMarks(prefs, markKey, nextMarks)
+              savePrefs(next)
+              art.setting.update({ name: 'introMark', html: `片头：${nextMarks.introEnd ? formatSec(nextMarks.introEnd) : '--'}` })
+              art.notice.show = '已清除片头'
+            },
+          },
+          {
+            name: 'outroMark',
+            html: `片尾：${marks.outroStart ? formatSec(marks.outroStart) : '--'}`,
+            onClick: () => {
+              const nextMarks = { ...marks, outroStart: undefined }
+              const next = setMarks(prefs, markKey, nextMarks)
+              savePrefs(next)
+              art.setting.update({ name: 'outroMark', html: `片尾：${nextMarks.outroStart ? formatSec(nextMarks.outroStart) : '--'}` })
+              art.notice.show = '已清除片尾'
+            },
+          },
+        ],
+        customType: {
+          m3u8: (video: HTMLVideoElement, url: string) => {
+            if (hlsRef.current) {
+              hlsRef.current.destroy()
+              hlsRef.current = null
+            }
+            if (!Hls.isSupported()) {
+              video.src = toProxyUrl(url)
+              return
+            }
+            const hls = new Hls({
+              enableWorker: true,
+              backBufferLength: 30,
+              xhrSetup: (xhr, reqUrl) => {
+                xhr.open('GET', toProxyUrl(reqUrl), true)
+              },
+            })
+            hlsRef.current = hls
+            hls.loadSource(url)
+            hls.attachMedia(video)
+          },
+        },
+      })
+
+      if (prefs.aspectRatio) art.aspectRatio = prefs.aspectRatio
+
+      let introApplied = false
+      let outroTriggered = false
+
+      const doNextEpisode = () => {
+        const latest = loadPrefs()
+        const delta = latest.episodeOrder === 'desc' ? -1 : 1
+        const s = playSources[currentSourceIndex]
+        if (!s) return
+        const nextIndex = currentEpisodeIndex + delta
+        if (nextIndex < 0 || nextIndex >= s.episodes.length) return
+        switchEpisode(currentSourceIndex, nextIndex)
       }
+
+      art.on('ready', () => setPlayerLoading(false))
+      art.on('video:waiting', () => setPlayerLoading(true))
+      art.on('video:playing', () => {
+        setPlayerLoading(false)
+        const latest = loadPrefs()
+        const latestMarks = getMarks(latest, markKey)
+        const introEnd = latestMarks.introEnd || 0
+        if (introEnd > 0 && !introApplied && art.currentTime + 0.2 < introEnd) {
+          introApplied = true
+          art.currentTime = introEnd
+          art.notice.show = `已跳过片头：${formatSec(introEnd)}`
+        }
+      })
+      art.on('video:timeupdate', () => {
+        const latest = loadPrefs()
+        if (!latest.autoNext) return
+        const latestMarks = getMarks(latest, markKey)
+        const outroStart = latestMarks.outroStart || 0
+        if (!outroStart) return
+        if (outroTriggered) return
+        if (art.currentTime + 0.2 < outroStart) return
+        outroTriggered = true
+        doNextEpisode()
+      })
+      art.on('video:ended', () => {
+        const latest = loadPrefs()
+        if (!latest.autoNext) return
+        doNextEpisode()
+      })
+      art.on('error', () => {
+        setPlayerLoading(false)
+        setPlayerError('播放失败')
+      })
+
+      art.controls.add({
+        name: 'refresh',
+        position: 'left',
+        html: '<span style="font-size:12px;">刷新</span>',
+        click: () => {
+          const current = art.url
+          if (current) art.switchUrl(current)
+        },
+      })
+      art.controls.add({
+        name: 'replay',
+        position: 'left',
+        html: '<span style="font-size:12px;">重播</span>',
+        click: () => {
+          art.currentTime = 0
+          art.play()
+        },
+      })
+
+      artRef.current = art
+      art.controls.add({
+        name: 'intro',
+        position: 'left',
+        html: '<span style="font-size:12px;">片头</span>',
+        click: () => {
+          const prefsNow = loadPrefs()
+          const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
+          const cur = Math.max(0, Math.floor(art.currentTime))
+          const marksNow = getMarks(prefsNow, key)
+          const nextMarks = { ...marksNow, introEnd: cur }
+          const next = setMarks(prefsNow, key, nextMarks)
+          savePrefs(next)
+          art.setting.update({ name: 'introMark', html: `片头：${nextMarks.introEnd ? formatSec(nextMarks.introEnd) : '--'}` })
+          art.notice.show = `片头已记录：${formatSec(cur)}`
+        },
+      })
+      art.controls.add({
+        name: 'outro',
+        position: 'left',
+        html: '<span style="font-size:12px;">片尾</span>',
+        click: () => {
+          const prefsNow = loadPrefs()
+          const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
+          const cur = Math.max(0, Math.floor(art.currentTime))
+          const marksNow = getMarks(prefsNow, key)
+          const nextMarks = { ...marksNow, outroStart: cur }
+          const next = setMarks(prefsNow, key, nextMarks)
+          savePrefs(next)
+          art.setting.update({ name: 'outroMark', html: `片尾：${nextMarks.outroStart ? formatSec(nextMarks.outroStart) : '--'}` })
+          art.notice.show = `片尾已记录：${formatSec(cur)}`
+        },
+      })
     }
-
-    if (playerRef.current) {
-      playerRef.current.destroy(false)
-    }
-
-    const isM3u8 = episode.url.includes('.m3u8')
-
-    playerRef.current = new Artplayer({
-      container: artRef.current,
-      url: episode.url,
-      type: isM3u8 ? 'm3u8' : 'auto',
-      customType: {
-        m3u8: playM3u8,
-      },
-      volume: 0.5,
-      isLive: false,
-      muted: false,
-      autoplay: true,
-      pip: true,
-      autoSize: true,
-      autoMini: true,
-      screenshot: true,
-      setting: true,
-      loop: false,
-      flip: true,
-      playbackRate: true,
-      aspectRatio: true,
-      fullscreen: true,
-      fullscreenWeb: true,
-      subtitleOffset: true,
-      miniProgressBar: true,
-      mutex: true,
-      backdrop: true,
-      playsInline: true,
-      autoPlayback: true,
-      airplay: true,
-      theme: '#00AEEC',
-      lang: navigator.language.toLowerCase(),
-    })
+    start()
 
     return () => {
-      if (playerRef.current) {
-        playerRef.current.destroy(false)
-        playerRef.current = null
+      cancelled = true
+      if (artRef.current) {
+        artRef.current.destroy(false)
+        artRef.current = null
+      }
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
       }
     }
   }, [playSources, currentSourceIndex, currentEpisodeIndex, detail])
@@ -233,6 +641,20 @@ const Play: React.FC = () => {
       state: { detail, playSources }
     })
   }
+
+  const toggleEpisodeOrder = (next: EpisodeOrder) => {
+    if (next !== 'asc' && next !== 'desc') return
+    setEpisodeOrder(next)
+    const prefs = loadPrefs()
+    savePrefs({ ...prefs, episodeOrder: next })
+  }
+
+  const orderedEpisodes = (() => {
+    const eps = playSources[currentSourceIndex]?.episodes || []
+    const withIndex = eps.map((ep, index) => ({ ep, index }))
+    if (episodeOrder === 'desc') return withIndex.reverse()
+    return withIndex
+  })()
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-bili-text">
@@ -256,7 +678,7 @@ const Play: React.FC = () => {
         </div>
       ) : error ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center min-h-[40vh]">
-          <img src="https://s1.hdslb.com/bfs/static/jinkela/space/assets/nodata.png" alt="error" className="w-48 mb-4 opacity-80" />
+          <SmartImage alt="error" className="w-48 mb-4 opacity-80" fallbackText="加载失败" />
           <p className="text-bili-text font-medium">{error}</p>
         </div>
       ) : (
@@ -264,7 +686,21 @@ const Play: React.FC = () => {
           {/* Left: Player & Info */}
           <div className="flex-1 flex flex-col min-w-0">
             <div className="bg-black rounded-xl overflow-hidden shadow-lg mb-4 aspect-video w-full">
-              <div ref={artRef} className="w-full h-full"></div>
+              <div className="relative w-full h-full">
+                <div ref={playerContainerRef} className="w-full h-full" />
+                {(playerLoading || playerError) && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    {playerError ? (
+                      <span className="text-white text-sm px-4 text-center">{playerError}</span>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        <span className="text-white text-sm">加载中...</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
             
             <div className="mb-6">
@@ -289,16 +725,41 @@ const Play: React.FC = () => {
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col bg-bili-grayBg/30 rounded-xl border border-bili-border overflow-hidden h-fit max-h-[800px]">
             <div className="p-4 border-b border-bili-border bg-white flex justify-between items-center">
               <h3 className="font-medium text-bili-text">视频选集</h3>
-              <span className="text-xs text-bili-textLight bg-bili-grayBg px-2 py-1 rounded">共 {playSources[currentSourceIndex]?.episodes.length || 0} 集</span>
+              <div className="flex items-center gap-2">
+                <button
+                  className={`text-xs px-2 py-1 rounded border transition-colors ${
+                    episodeOrder === 'asc'
+                      ? 'bg-bili-blue text-white border-bili-blue'
+                      : 'bg-white text-bili-textLight border-bili-border hover:text-bili-text'
+                  }`}
+                  onClick={() => toggleEpisodeOrder('asc')}
+                >
+                  正序
+                </button>
+                <button
+                  className={`text-xs px-2 py-1 rounded border transition-colors ${
+                    episodeOrder === 'desc'
+                      ? 'bg-bili-blue text-white border-bili-blue'
+                      : 'bg-white text-bili-textLight border-bili-border hover:text-bili-text'
+                  }`}
+                  onClick={() => toggleEpisodeOrder('desc')}
+                >
+                  倒序
+                </button>
+                <span className="text-xs text-bili-textLight bg-bili-grayBg px-2 py-1 rounded">共 {playSources[currentSourceIndex]?.episodes.length || 0} 集</span>
+              </div>
             </div>
             
             {playSources.length > 1 && (
-              <div className="px-4 py-3 bg-white border-b border-bili-border flex overflow-x-auto custom-scrollbar gap-2">
+              <div className="px-4 py-3 pb-4 bg-white border-b border-bili-border flex items-center flex-nowrap overflow-x-auto overflow-y-hidden custom-scrollbar gap-2">
                 {playSources.map((source, index) => (
                   <button
                     key={index}
-                    onClick={() => setCurrentSourceIndex(index)}
-                    className={`whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    onClick={() => {
+                      const startIndex = episodeOrder === 'desc' ? Math.max(0, source.episodes.length - 1) : 0
+                      switchEpisode(index, startIndex)
+                    }}
+                    className={`flex-none whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                       currentSourceIndex === index
                         ? 'bg-bili-blue text-white'
                         : 'bg-bili-grayBg text-bili-textLight hover:text-bili-text'
@@ -312,7 +773,7 @@ const Play: React.FC = () => {
             
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-white">
               <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
-                {playSources[currentSourceIndex]?.episodes.map((ep, index) => (
+                {orderedEpisodes.map(({ ep, index }) => (
                   <button
                     key={index}
                     onClick={() => switchEpisode(currentSourceIndex, index)}

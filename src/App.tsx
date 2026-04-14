@@ -15,11 +15,13 @@ function App() {
     const loadDefaultConfig = async () => {
       // 在本地环境或测试环境中，直接使用 Mock 数据
       if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-            console.log("Using mock data directly for local testing...")
-            setUrl('http://mock.api')
-            setSites([{ key: "mock1", name: "Mock Site 1", type: 1, api: "http://mock.api", url: "http://mock.api" }])
-            return
+        if (!url) {
+          console.log("Using mock data directly for local testing...")
+          setUrl('http://mock.api')
+          setSites([{ key: "mock1", name: "Mock Site 1", type: 1, api: "http://mock.api", url: "http://mock.api" }])
         }
+        return
+      }
       
       // 真实环境：如果未设置过 URL，则设置默认的饭太硬数据源并拉取
       if (!url) {
