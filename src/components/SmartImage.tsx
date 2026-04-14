@@ -35,6 +35,7 @@ const SmartImage: React.FC<SmartImageProps> = ({ src, fallbackText, fallbackSrc,
     <img
       {...rest}
       src={resolved}
+      referrerPolicy="no-referrer"
       loading={loading || 'lazy'}
       decoding={decoding || 'async'}
       onError={(e) => {
