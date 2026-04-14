@@ -407,7 +407,6 @@ const Play: React.FC = () => {
         fullscreenWeb: true,
         screenshot: true,
         mutex: true,
-        aspectRatio: true,
         moreVideoAttr: {
           playsInline: true,
           preload: 'metadata',
@@ -563,25 +562,6 @@ const Play: React.FC = () => {
       art.on('error', () => {
         setPlayerLoading(false)
         setPlayerError('播放失败')
-      })
-
-      art.controls.add({
-        name: 'refresh',
-        position: 'left',
-        html: '<span style="font-size:12px;">刷新</span>',
-        click: () => {
-          const current = art.url
-          if (current) art.switchUrl(current)
-        },
-      })
-      art.controls.add({
-        name: 'replay',
-        position: 'left',
-        html: '<span style="font-size:12px;">重播</span>',
-        click: () => {
-          art.currentTime = 0
-          art.play()
-        },
       })
 
       artRef.current = art
