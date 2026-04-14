@@ -1,21 +1,91 @@
-export const fetchData = async <T = any>(url: string, options?: RequestInit): Promise<{ success: boolean; data?: T; error?: string }> => {
+type FetchResult<T> = { success: boolean; data?: T; error?: string }
+
+const normalizeUrl = (raw: string): string => {
+  if (!raw) return raw
+  const trimmed = raw.trim()
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed
+  try {
+    return new URL(trimmed).toString()
+  } catch {
+    return trimmed
+  }
+}
+
+const decodeMaybeGb18030 = (buffer: ArrayBuffer): string => {
+  const decode = (encoding: string): string => {
+    try {
+      return new TextDecoder(encoding).decode(buffer)
+    } catch {
+      return new TextDecoder('utf-8').decode(buffer)
+    }
+  }
+  const utf8 = decode('utf-8')
+  let replacementCount = 0
+  let privateUseCount = 0
+  for (let i = 0; i < utf8.length; i++) {
+    const code = utf8.charCodeAt(i)
+    if (code === 0xfffd) replacementCount += 1
+    if (code >= 0xe000 && code <= 0xf8ff) privateUseCount += 1
+  }
+  return replacementCount >= 10 || privateUseCount >= 10 ? decode('gb18030') : utf8
+}
+
+const isHtmlLike = (text: string): boolean => {
+  const trimmed = (text || '').trimStart()
+  return /^<!doctype\s+html/i.test(trimmed) || /^<html/i.test(trimmed)
+}
+
+const getHttpProxy = (): string => {
+  const v = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
+  return v
+}
+
+export const fetchText = async (url: string, options?: RequestInit): Promise<FetchResult<string>> => {
+  if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+    return (window as any).ipcRenderer.invoke('fetch-text', url) as Promise<FetchResult<string>>
+  }
+
+  try {
+    const normalizedUrl = normalizeUrl(url)
+    if (normalizedUrl.includes('mock.api')) return { success: true, data: '' }
+
+    const useLocalProxy = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.DEV)
+    if (useLocalProxy) {
+      const proxyUrl = `/proxy?ua=tvbox&url=${encodeURIComponent(normalizedUrl)}`
+      const response = await fetch(proxyUrl, options)
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const buffer = await response.arrayBuffer()
+      return { success: true, data: decodeMaybeGb18030(buffer) }
+    }
+
+    const httpProxy = getHttpProxy()
+    if (httpProxy) {
+      const sep = httpProxy.includes('?') ? '&' : '?'
+      const proxyUrl = `${httpProxy}${sep}url=${encodeURIComponent(normalizedUrl)}`
+      const response = await fetch(proxyUrl, options)
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const buffer = await response.arrayBuffer()
+      return { success: true, data: decodeMaybeGb18030(buffer) }
+    }
+
+    const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(normalizedUrl)}`
+    const response = await fetch(corsProxyUrl, options)
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+    return { success: true, data: await response.text() }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export const fetchData = async <T = any>(url: string, options?: RequestInit): Promise<FetchResult<T>> => {
   // If running in Electron, use ipcRenderer
   if (typeof window !== 'undefined' && window.ipcRenderer) {
     return window.ipcRenderer.invoke('fetch-data', url) as Promise<{ success: boolean; data?: T; error?: string }>;
   }
 
   try {
-    let text = '';
-    const normalizedUrl = (() => {
-      if (!url) return url
-      const trimmed = url.trim()
-      if (!/^https?:\/\//i.test(trimmed)) return trimmed
-      try {
-        return new URL(trimmed).toString()
-      } catch {
-        return trimmed
-      }
-    })()
+    let text = ''
+    const normalizedUrl = normalizeUrl(url)
     
     // 如果是 mock API 才返回 Mock 数据（避免本地开发时无法请求真实数据源）
     if (normalizedUrl.includes('mock.api')) {
@@ -42,55 +112,40 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
         const proxyUrl = `/proxy?ua=tvbox&url=${encodeURIComponent(normalizedUrl)}`
         const response = await fetch(proxyUrl, options)
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-        const decode = (buffer: ArrayBuffer, encoding: string): string => {
-          try {
-            return new TextDecoder(encoding).decode(buffer)
-          } catch {
-            return new TextDecoder('utf-8').decode(buffer)
-          }
-        }
-        const countReplacement = (s: string): number => {
-          let n = 0
-          for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 0xfffd) n += 1
-          return n
-        }
-        const countPrivateUse = (s: string): number => {
-          let n = 0
-          for (let i = 0; i < s.length; i++) {
-            const code = s.charCodeAt(i)
-            if (code >= 0xe000 && code <= 0xf8ff) n += 1
-          }
-          return n
-        }
         const buffer = await response.arrayBuffer()
-        const utf8 = decode(buffer, 'utf-8')
-        const replacementCount = countReplacement(utf8)
-        const privateUseCount = countPrivateUse(utf8)
-        text = replacementCount >= 10 || privateUseCount >= 10 ? decode(buffer, 'gb18030') : utf8
+        text = decodeMaybeGb18030(buffer)
       } else {
-        const corsProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(normalizedUrl)}`
-        const response = await fetch(corsProxyUrl, options)
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-        const jsonResponse = await response.json()
+        const httpProxy = getHttpProxy()
+        if (httpProxy) {
+          const sep = httpProxy.includes('?') ? '&' : '?'
+          const proxyUrl = `${httpProxy}${sep}url=${encodeURIComponent(normalizedUrl)}`
+          const response = await fetch(proxyUrl, options)
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+          const buffer = await response.arrayBuffer()
+          text = decodeMaybeGb18030(buffer)
+        } else {
+          const corsProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(normalizedUrl)}`
+          const response = await fetch(corsProxyUrl, options)
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+          const jsonResponse = await response.json()
 
-        if (jsonResponse.status && jsonResponse.status.http_code !== 200) {
-          throw new Error(`HTTP error! status: ${jsonResponse.status.http_code}`)
+          if (jsonResponse.status && jsonResponse.status.http_code !== 200) {
+            throw new Error(`HTTP error! status: ${jsonResponse.status.http_code}`)
+          }
+          text = jsonResponse.contents
         }
-        text = jsonResponse.contents
       }
     }
     
     try {
-      const trimmed = text.trimStart()
-      if (/^<!doctype\s+html/i.test(trimmed) || /^<html/i.test(trimmed)) {
+      if (isHtmlLike(text)) {
         throw new Error('Invalid JSON format')
       }
       const data = JSON.parse(text);
       return { success: true, data };
     } catch {
       // Fallback for TVBox configs that might have prefix/suffix (like **...**)
-      const trimmed = text.trimStart()
-      if (/^<!doctype\s+html/i.test(trimmed) || /^<html/i.test(trimmed)) {
+      if (isHtmlLike(text)) {
         throw new Error('Invalid JSON format')
       }
       const objStart = text.indexOf('{')

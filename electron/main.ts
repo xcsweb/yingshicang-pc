@@ -228,4 +228,14 @@ app.whenReady().then(() => {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
+
+  ipcMain.handle('fetch-text', async (_, url: string) => {
+    try {
+      const res = await fetchText(url)
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
+      return { success: true, data: res.text }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
 })

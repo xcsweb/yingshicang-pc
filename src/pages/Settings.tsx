@@ -88,6 +88,25 @@ const rankSite = (site: Site): number => {
   return score
 }
 
+const describeSiteStats = (sites: Site[]): string => {
+  const types: Record<string, number> = {}
+  let httpApiCount = 0
+  let cspCount = 0
+  for (const s of sites) {
+    const t = String((s as any)?.type ?? 'unknown')
+    types[t] = (types[t] || 0) + 1
+    const api = (s.api || s.url || '').trim()
+    if (api && isHttpUrl(api)) httpApiCount += 1
+    if ((api || '').toLowerCase().includes('csp_')) cspCount += 1
+  }
+  const topTypes = Object.entries(types)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(', ')
+  return `总站点 ${sites.length}，http站点 ${httpApiCount}，csp站点 ${cspCount}，type分布 ${topTypes || '无'}`
+}
+
 const logSitePick = (label: string, uniq: Site[], filtered: Site[]) => {
   const pick = (sites: Site[]) =>
     sites.slice(0, 5).map(s => ({ key: s.key, name: s.name, type: s.type, api: s.api || s.url, ext: s.ext }))
@@ -360,6 +379,7 @@ const Settings: React.FC = () => {
   const [speedTesting, setSpeedTesting] = useState(false)
   const [speedResults, setSpeedResults] = useState<Record<string, SpeedTestResult>>({})
   const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null)
+  const httpProxy = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
 
   const fastestPreset = useMemo(() => {
     let bestUrl = ''
@@ -610,9 +630,9 @@ const Settings: React.FC = () => {
           const uniq = uniqSitesByKey(multiSites)
           const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
           logSitePick('multi-text', uniq, filtered)
-          if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+          if (!filtered.length) throw new Error(`该数据源未包含可用于首页的站点（${describeSiteStats(uniq)}）`)
           const verified = await pickVerifiedSites(filtered)
-          if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+          if (!verified.length) throw new Error(`该数据源未包含可用于首页的站点（已过滤后站点数 ${filtered.length}）`)
           setSites(verified)
           return
         }
@@ -626,9 +646,9 @@ const Settings: React.FC = () => {
         const uniq = uniqSitesByKey(directSites)
         const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
         logSitePick('direct', uniq, filtered)
-        if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+        if (!filtered.length) throw new Error(`该数据源未包含可用于首页的站点（${describeSiteStats(uniq)}）`)
         const verified = await pickVerifiedSites(filtered)
-        if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+        if (!verified.length) throw new Error(`该数据源未包含可用于首页的站点（已过滤后站点数 ${filtered.length}）`)
         setSites(verified)
         return
       }
@@ -649,9 +669,9 @@ const Settings: React.FC = () => {
           const uniq = uniqSitesByKey(merged)
           const filtered = uniq.filter(isLikelyVideoSite).sort((a, b) => rankSite(b) - rankSite(a))
           logSitePick('multi-json', uniq, filtered)
-          if (!filtered.length) throw new Error('该数据源未包含可用于首页的站点')
+          if (!filtered.length) throw new Error(`该数据源未包含可用于首页的站点（${describeSiteStats(uniq)}）`)
           const verified = await pickVerifiedSites(filtered)
-          if (!verified.length) throw new Error('该数据源未包含可用于首页的站点')
+          if (!verified.length) throw new Error(`该数据源未包含可用于首页的站点（已过滤后站点数 ${filtered.length}）`)
           setSites(verified)
           return
         }
@@ -659,7 +679,13 @@ const Settings: React.FC = () => {
       
       throw new Error('解析数据源失败')
     } catch (err: any) {
-      setError(err.message)
+      const msg = String(err?.message || '解析失败')
+      const isProd = typeof import.meta !== 'undefined' && !Boolean((import.meta as any).env?.DEV)
+      if (isProd && !httpProxy && /HTTP error!\s*status:\s*(408|500|522)/i.test(msg)) {
+        setError(`${msg}（线上版可能被跨域/代理限制拦截，建议配置 VITE_HTTP_PROXY）`)
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
       setMultiProgress(null)

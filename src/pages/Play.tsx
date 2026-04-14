@@ -119,6 +119,11 @@ const isLikelyHlsUrl = (raw: string): boolean => {
 const toProxyUrl = (raw: string): string => {
   const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
   if (useLocalProxy) return `/proxy?ua=tvbox&url=${encodeURIComponent(raw)}`
+  const httpProxy = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
+  if (httpProxy) {
+    const sep = httpProxy.includes('?') ? '&' : '?'
+    return `${httpProxy}${sep}url=${encodeURIComponent(raw)}`
+  }
   return `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`
 }
 
