@@ -67,11 +67,30 @@ export const fetchText = async (url: string, options?: RequestInit): Promise<Fet
       const buffer = await response.arrayBuffer()
       return { success: true, data: decodeMaybeGb18030(buffer) }
     }
+    
+    let text = ''
+    const publicProxies = [
+      `https://api.allorigins.win/raw?url=`,
+      `https://api.codetabs.com/v1/proxy?quest=`
+    ]
+    let lastError: Error | null = null
 
-    const corsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(normalizedUrl)}`
-    const response = await fetch(corsProxyUrl, options)
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-    return { success: true, data: await response.text() }
+    for (const proxyBase of publicProxies) {
+      try {
+        const corsProxyUrl = `${proxyBase}${encodeURIComponent(normalizedUrl)}`
+        const response = await fetch(corsProxyUrl, options)
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+        text = await response.text()
+        lastError = null
+        break // 成功则跳出循环
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e))
+      }
+    }
+    
+    if (lastError) throw lastError
+
+    return { success: true, data: text }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -124,15 +143,36 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
           const buffer = await response.arrayBuffer()
           text = decodeMaybeGb18030(buffer)
         } else {
-          const corsProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(normalizedUrl)}`
-          const response = await fetch(corsProxyUrl, options)
-          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-          const jsonResponse = await response.json()
+          let jsonResponse: any = null
+          let lastError: Error | null = null
+          const publicProxies = [
+            `https://api.allorigins.win/get?url=`,
+            `https://api.codetabs.com/v1/proxy?quest=`
+          ]
 
-          if (jsonResponse.status && jsonResponse.status.http_code !== 200) {
-            throw new Error(`HTTP error! status: ${jsonResponse.status.http_code}`)
+          for (const proxyBase of publicProxies) {
+            try {
+              const corsProxyUrl = `${proxyBase}${encodeURIComponent(normalizedUrl)}`
+              const response = await fetch(corsProxyUrl, options)
+              if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+              
+              if (proxyBase.includes('allorigins')) {
+                jsonResponse = await response.json()
+                if (jsonResponse.status && jsonResponse.status.http_code !== 200) {
+                  throw new Error(`HTTP error! status: ${jsonResponse.status.http_code}`)
+                }
+                text = jsonResponse.contents
+              } else {
+                // codetabs 直接返回 raw 内容
+                text = await response.text()
+              }
+              lastError = null
+              break // 成功则跳出循环
+            } catch (e) {
+              lastError = e instanceof Error ? e : new Error(String(e))
+            }
           }
-          text = jsonResponse.contents
+          if (lastError) throw lastError
         }
       }
     }
