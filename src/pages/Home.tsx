@@ -109,7 +109,11 @@ const Home: React.FC = () => {
       }
       
       const response = await fetchData<SiteResponse>(url.toString())
-      if (!response.success) throw new Error(response.error || '请求失败')
+      if (!response.success) {
+        // 如果是 530 这种特定的代理错误，明确抛出以供区分
+        if (response.error?.includes('530')) throw new Error('ProxyError: 530')
+        throw new Error(response.error || '请求失败')
+      }
       
       const data = response.data
       const nextCategories = data?.class && Array.isArray(data.class) ? data.class : []
@@ -123,7 +127,14 @@ const Home: React.FC = () => {
       return nextCategories.length > 0 || nextVideos.length > 0
     } catch (err: unknown) {
       console.error("Home: Failed to load videos", err)
-      setError(err instanceof Error ? err.message : '获取数据失败')
+      const errorMsg = err instanceof Error ? err.message : '获取数据失败'
+      
+      // 如果明确是 530（目标源 DNS 挂了或者防爬），记录提示但不阻断自动切换
+      if (errorMsg.includes('ProxyError: 530')) {
+        setError('该站点当前不可用（源服务器 DNS 解析失败或反代拦截），正在尝试下一个源...')
+      } else {
+        setError(errorMsg)
+      }
       return false
     } finally {
       setLoading(false)
@@ -151,8 +162,11 @@ const Home: React.FC = () => {
     if (currentSite) {
        const tryLoad = async () => {
          const success = await loadSiteData(currentSite.key, currentCategory, keyword)
-         if (!success && !currentCategory && !keyword) {
-           autoNextSite(currentSite.key)
+         if (!success) {
+           // 无论是不是分类或搜索，只要加载失败，如果是刚进首页就自动尝试下一个源
+           if (!currentCategory && !keyword) {
+             autoNextSite(currentSite.key)
+           }
          }
        }
        tryLoad()

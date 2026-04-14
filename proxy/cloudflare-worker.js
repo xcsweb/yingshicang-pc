@@ -36,11 +36,9 @@ export default {
       method: 'GET',
       redirect: 'follow',
       headers: {
-        'user-agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+        'user-agent': 'Dart/2.14 (dart:io)', // 很多 TVBox 源对浏览器 UA 会直接返回 530 拦截，伪装成 dart 客户端或 okhttp
+        accept: '*/*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        referer: `${targetUrl.origin}/`,
       },
     })
 
