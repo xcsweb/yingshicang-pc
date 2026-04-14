@@ -279,22 +279,45 @@ const createSpeedTester = (timeoutMs: number) => async (url: string): Promise<Sp
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs))
 
-  const start = safeNow()
+  let start = safeNow()
   console.log('Settings: speed test start', url)
   try {
-    const result = await fetchData<any>(normalizeUrl(url), { signal: controller.signal })
-    const ms = asMs(start, safeNow())
+    const result = await fetchData<any>(normalizeUrl(url), { signal: controller.signal, noCache: true })
+    
     if (result.success) {
       const usefulSites = countUsefulSitesFromConfig(result.data)
-      const siteCount = extractSitesFromConfig(result.data).length
+      const sites = extractSitesFromConfig(result.data)
       const urlCount = extractUrlListFromConfig(result.data).length
-      if (siteCount > 0 || urlCount > 0) {
-      console.log('Settings: speed test ok', url, ms)
-      return { status: 'ok', ms, usefulSites }
+      
+      let finalMs = asMs(start, safeNow())
+      
+      // 如果是本地内置源（local://），直接读取没有网络延迟
+      // 为了测出真实的“请求第三方服务器”的速度，我们从配置里挑一个有代表性的 site 测速
+      if (url.startsWith('local://') && sites.length > 0) {
+        const testSite = sites.find(isLikelyVideoSite) || sites[0]
+        const apiUrl = testSite.api || testSite.url
+        if (apiUrl && isHttpUrl(apiUrl)) {
+          const listUrl = buildHomeListUrl(apiUrl)
+          if (listUrl) {
+            start = safeNow()
+            const realResult = await fetchData<any>(listUrl, { signal: controller.signal, noCache: true })
+            if (realResult.success && isUsableHomeResponse(realResult.data)) {
+               finalMs = asMs(start, safeNow())
+            } else {
+               return { status: 'fail', ms: finalMs, error: '内置源站点探测失败' }
+            }
+          }
+        }
       }
-      console.log('Settings: speed test invalid config', url, ms)
-      return { status: 'fail', ms, error: 'Invalid config' }
+
+      if (sites.length > 0 || urlCount > 0) {
+        console.log('Settings: speed test ok', url, finalMs)
+        return { status: 'ok', ms: finalMs, usefulSites }
+      }
+      console.log('Settings: speed test invalid config', url, finalMs)
+      return { status: 'fail', ms: finalMs, error: 'Invalid config' }
     }
+    const ms = asMs(start, safeNow())
     console.log('Settings: speed test fail', url, ms, result.error)
     return { status: 'fail', ms, error: result.error || 'Failed' }
   } catch (err: any) {
