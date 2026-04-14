@@ -4,10 +4,8 @@
 
  ⛅️ wrangler 4.82.2
 ───────────────────
-Total Upload: 2.06 KiB / gzip: 0.97 KiB
-Uploaded yingshi-proxy (3.99 sec)
-Deployed yingshi-proxy triggers (2.39 sec)
+Total Upload: 2.97 KiB / gzip: 1.21 KiB
+Uploaded yingshi-proxy (3.49 sec)
+Deployed yingshi-proxy triggers (1.21 sec)
   https://yingshi-proxy.15123953025.workers.dev
-Current Version ID: 2ce518e4-ab14-41ce-a662-302ac6cb2ac6
-
-Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+Current Version ID: 05437934-53ec-48af-8f52-a3e4d64c0592

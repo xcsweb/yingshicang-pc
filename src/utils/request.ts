@@ -163,14 +163,23 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit & { 
         text = decodeMaybeGb18030(buffer)
       } else {
         const httpProxy = getHttpProxy()
+        let proxySuccess = false
+        
         if (httpProxy) {
-          const sep = httpProxy.includes('?') ? '&' : '?'
-          const proxyUrl = `${httpProxy}${sep}url=${encodeURIComponent(normalizedUrl)}`
-          const response = await fetch(proxyUrl, fetchOptions)
-          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-          const buffer = await response.arrayBuffer()
-          text = decodeMaybeGb18030(buffer)
-        } else {
+          try {
+            const sep = httpProxy.includes('?') ? '&' : '?'
+            const proxyUrl = `${httpProxy}${sep}url=${encodeURIComponent(normalizedUrl)}`
+            const response = await fetch(proxyUrl, fetchOptions)
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+            const buffer = await response.arrayBuffer()
+            text = decodeMaybeGb18030(buffer)
+            proxySuccess = true
+          } catch (e: any) {
+            console.warn('Custom proxy failed, falling back to public proxies', e)
+          }
+        }
+        
+        if (!proxySuccess) {
           let jsonResponse: any = null
           let lastError: Error | null = null
           const publicProxies = [
