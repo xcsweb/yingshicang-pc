@@ -40,6 +40,10 @@ const getHttpProxy = (): string => {
   return v
 }
 
+// 内存缓存：记录请求 URL 对应的解析后数据和时间戳
+const memCache = new Map<string, { data: any; timestamp: number }>()
+const CACHE_TTL_MS = 5 * 60 * 1000 // 缓存 5 分钟
+
 export const fetchText = async (url: string, options?: RequestInit): Promise<FetchResult<string>> => {
   if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
     return (window as any).ipcRenderer.invoke('fetch-text', url) as Promise<FetchResult<string>>
@@ -96,15 +100,39 @@ export const fetchText = async (url: string, options?: RequestInit): Promise<Fet
   }
 }
 
-export const fetchData = async <T = any>(url: string, options?: RequestInit): Promise<FetchResult<T>> => {
+export const fetchData = async <T = any>(url: string, options?: RequestInit & { noCache?: boolean }): Promise<FetchResult<T>> => {
+  const normalizedUrl = normalizeUrl(url)
+  const isCacheable = !options?.noCache && (!options?.method || options.method.toUpperCase() === 'GET')
+
+  // 1. 尝试读取内存缓存
+  if (isCacheable) {
+    const cached = memCache.get(normalizedUrl)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      console.log('Using cached data for:', normalizedUrl)
+      return { success: true, data: cached.data as T }
+    }
+  }
+
+  // 2. 为请求添加全局超时控制（10秒）
+  const controller = new AbortController()
+  if (options?.signal) {
+    options.signal.addEventListener('abort', () => controller.abort())
+  }
+  const timeoutId = setTimeout(() => controller.abort(), 10000)
+  const fetchOptions = { ...options, signal: controller.signal }
+
   // If running in Electron, use ipcRenderer
   if (typeof window !== 'undefined' && window.ipcRenderer) {
-    return window.ipcRenderer.invoke('fetch-data', url) as Promise<{ success: boolean; data?: T; error?: string }>;
+    clearTimeout(timeoutId)
+    const res = await window.ipcRenderer.invoke('fetch-data', url) as { success: boolean; data?: T; error?: string };
+    if (isCacheable && res && res.success) {
+      memCache.set(normalizedUrl, { data: res.data, timestamp: Date.now() })
+    }
+    return res;
   }
 
   try {
     let text = ''
-    const normalizedUrl = normalizeUrl(url)
     
     // 如果是 mock API 才返回 Mock 数据（避免本地开发时无法请求真实数据源）
     if (normalizedUrl.includes('mock.api')) {
@@ -129,7 +157,7 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
       const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
       if (useLocalProxy) {
         const proxyUrl = `/proxy?ua=tvbox&url=${encodeURIComponent(normalizedUrl)}`
-        const response = await fetch(proxyUrl, options)
+        const response = await fetch(proxyUrl, fetchOptions)
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
         const buffer = await response.arrayBuffer()
         text = decodeMaybeGb18030(buffer)
@@ -138,7 +166,7 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
         if (httpProxy) {
           const sep = httpProxy.includes('?') ? '&' : '?'
           const proxyUrl = `${httpProxy}${sep}url=${encodeURIComponent(normalizedUrl)}`
-          const response = await fetch(proxyUrl, options)
+          const response = await fetch(proxyUrl, fetchOptions)
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
           const buffer = await response.arrayBuffer()
           text = decodeMaybeGb18030(buffer)
@@ -153,7 +181,7 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
           for (const proxyBase of publicProxies) {
             try {
               const corsProxyUrl = `${proxyBase}${encodeURIComponent(normalizedUrl)}`
-              const response = await fetch(corsProxyUrl, options)
+              const response = await fetch(corsProxyUrl, fetchOptions)
               if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
               
               if (proxyBase.includes('allorigins')) {
@@ -177,12 +205,12 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
       }
     }
     
+    let parsedData: any;
     try {
       if (isHtmlLike(text)) {
         throw new Error('Invalid JSON format')
       }
-      const data = JSON.parse(text);
-      return { success: true, data };
+      parsedData = JSON.parse(text);
     } catch {
       // Fallback for TVBox configs that might have prefix/suffix (like **...**)
       if (isHtmlLike(text)) {
@@ -199,10 +227,16 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit): Pr
       if (end <= start) throw new Error('Invalid JSON format')
 
       const jsonText = text.slice(start, end + 1)
-      const data = JSON.parse(jsonText)
-      return { success: true, data }
+      parsedData = JSON.parse(jsonText)
     }
+
+    if (isCacheable) {
+      memCache.set(normalizedUrl, { data: parsedData, timestamp: Date.now() })
+    }
+    clearTimeout(timeoutId)
+    return { success: true, data: parsedData }
   } catch (error) {
+    clearTimeout(timeoutId)
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 };
