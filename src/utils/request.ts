@@ -109,6 +109,7 @@ const _fetchText = async (url: string, options?: RequestInit): Promise<FetchResu
     
     let text = ''
     const publicProxies = [
+      `https://cors.eu.org/`,
       `https://api.allorigins.win/raw?url=`,
       `https://api.codetabs.com/v1/proxy?quest=`
     ]
@@ -116,7 +117,9 @@ const _fetchText = async (url: string, options?: RequestInit): Promise<FetchResu
 
     for (const proxyBase of publicProxies) {
       try {
-        const corsProxyUrl = `${proxyBase}${encodeURIComponent(normalizedUrl)}`
+        const corsProxyUrl = proxyBase === 'https://cors.eu.org/'
+          ? `${proxyBase}${normalizedUrl}`
+          : `${proxyBase}${encodeURIComponent(normalizedUrl)}`
         const response = await fetch(corsProxyUrl, options)
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
         text = await response.text()
@@ -241,13 +244,16 @@ const _fetchData = async <T = any>(url: string, options?: RequestInit & { noCach
           let jsonResponse: any = null
           let lastError: Error | null = null
           const publicProxies = [
+            `https://cors.eu.org/`,
             `https://api.allorigins.win/get?url=`,
             `https://api.codetabs.com/v1/proxy?quest=`
           ]
 
           for (const proxyBase of publicProxies) {
             try {
-              const corsProxyUrl = `${proxyBase}${encodeURIComponent(normalizedUrl)}`
+              const corsProxyUrl = proxyBase === 'https://cors.eu.org/' 
+                ? `${proxyBase}${normalizedUrl}`
+                : `${proxyBase}${encodeURIComponent(normalizedUrl)}`
               const response = await fetch(corsProxyUrl, fetchOptions)
               if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
               
