@@ -3,13 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useDataSourceStore, type Site } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 
-// 如果使用 vite-plugin-pwa，可以引入以备更新
-// @ts-ignore
-import { useRegisterSW } from 'virtual:pwa-register/react'
-
 const PRESET_URLS = [
-  { name: 'dxawi', url: 'https://cdn.jsdelivr.net/gh/dxawi/0@main/0.json' },
-  { name: 'jyoketsu', url: 'https://cdn.jsdelivr.net/gh/jyoketsu/tv@main/m.json' },
+  { name: 'dxawi', url: 'https://fastly.jsdelivr.net/gh/dxawi/0@main/0.json' },
+  { name: 'jyoketsu', url: 'https://fastly.jsdelivr.net/gh/jyoketsu/tv@main/m.json' },
   // 注：以下大部分盒子迷源为 type=3 爬虫源，当前项目不支持。
   // 仅保留一个作为直播示例，或你可以添加自己维护的可用 CMS 源。
   { name: '盒子迷-直播', url: 'https://盒子迷.top/ZB' },
@@ -753,26 +749,30 @@ const Settings: React.FC = () => {
     }
   }
 
-  const { needRefresh, updateServiceWorker } = useRegisterSW({
-    onRegistered(r: any) {
-      console.log('SW Registered: ' + r)
-    },
-    onRegisterError(error: any) {
-      console.log('SW registration error', error)
-    }
-  })
-
   const handleClearCache = () => {
     if (window.confirm('这会清除所有已保存的数据源配置、缓存和历史记录。确认清除吗？')) {
       localStorage.clear()
       sessionStorage.clear()
-      window.location.href = '/'
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (const registration of registrations) {
+            registration.unregister()
+          }
+        })
+      }
+      window.location.href = import.meta.env.BASE_URL
     }
   }
 
   const handleUpdate = () => {
-    if (needRefresh) {
-      updateServiceWorker(true)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        for (const registration of registrations) {
+          registration.unregister()
+        }
+      }).finally(() => {
+        window.location.reload()
+      })
     } else {
       window.location.reload()
     }
@@ -809,10 +809,7 @@ const Settings: React.FC = () => {
                 onClick={handleUpdate}
                 className="px-4 py-2 text-sm rounded-lg bg-bili-grayBg text-bili-text font-medium hover:bg-gray-200 transition-colors relative"
               >
-                {needRefresh && (
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-bili-pink rounded-full border-2 border-white animate-pulse"></span>
-                )}
-                {needRefresh ? '立即升级新版本' : '检查更新'}
+                检查更新
               </button>
               <button
                 onClick={handleClearCache}

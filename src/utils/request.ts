@@ -40,11 +40,27 @@ const getHttpProxy = (): string => {
   return v
 }
 
+const generateFallbackUrls = (url: string): string[] => {
+  const urls = [url]
+  if (url.includes('fastly.jsdelivr.net') && (url.endsWith('.json') || url.endsWith('.txt'))) {
+    const match = url.match(/fastly\.jsdelivr\.net\/gh\/([^/]+)\/([^@/]+)(?:@([^/]+))?\/(.+)$/i)
+    if (match) {
+      const [, user, repo, branch = 'main', file] = match
+      urls.push(`https://raw.kkgithub.com/${user}/${repo}/${branch}/${file}`)
+      urls.push(`https://gcore.jsdelivr.net/gh/${user}/${repo}@${branch}/${file}`)
+    } else {
+      urls.push(url.replace('fastly.jsdelivr.net', 'raw.kkgithub.com'))
+      urls.push(url.replace('fastly.jsdelivr.net', 'gcore.jsdelivr.net'))
+    }
+  }
+  return urls
+}
+
 // 内存缓存：记录请求 URL 对应的解析后数据和时间戳
 const memCache = new Map<string, { data: any; timestamp: number }>()
 const CACHE_TTL_MS = 5 * 60 * 1000 // 缓存 5 分钟
 
-export const fetchText = async (url: string, options?: RequestInit): Promise<FetchResult<string>> => {
+const _fetchText = async (url: string, options?: RequestInit): Promise<FetchResult<string>> => {
   if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
     return (window as any).ipcRenderer.invoke('fetch-text', url) as Promise<FetchResult<string>>
   }
@@ -100,7 +116,17 @@ export const fetchText = async (url: string, options?: RequestInit): Promise<Fet
   }
 }
 
-export const fetchData = async <T = any>(url: string, options?: RequestInit & { noCache?: boolean }): Promise<FetchResult<T>> => {
+export const fetchText = async (url: string, options?: RequestInit): Promise<FetchResult<string>> => {
+  const urls = generateFallbackUrls(url)
+  let lastResult: FetchResult<string> = { success: false, error: 'Unknown error' }
+  for (const u of urls) {
+    lastResult = await _fetchText(u, options)
+    if (lastResult.success) return lastResult
+  }
+  return lastResult
+}
+
+const _fetchData = async <T = any>(url: string, options?: RequestInit & { noCache?: boolean }): Promise<FetchResult<T>> => {
   const normalizedUrl = normalizeUrl(url)
   const isCacheable = !options?.noCache && (!options?.method || options.method.toUpperCase() === 'GET')
 
@@ -252,4 +278,14 @@ export const fetchData = async <T = any>(url: string, options?: RequestInit & { 
     }
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
+};
+
+export const fetchData = async <T = any>(url: string, options?: RequestInit & { noCache?: boolean }): Promise<FetchResult<T>> => {
+  const urls = generateFallbackUrls(url)
+  let lastResult: FetchResult<T> = { success: false, error: 'Unknown error' }
+  for (const u of urls) {
+    lastResult = await _fetchData<T>(u, options)
+    if (lastResult.success) return lastResult
+  }
+  return lastResult
 };

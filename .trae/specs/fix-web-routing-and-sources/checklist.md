@@ -1,0 +1,6 @@
+- [x] "清除所有缓存" 按钮被点击后，页面应正确跳转至 `import.meta.env.BASE_URL` (如 `/yingshicang-pc/`)，而不是根路径 `/`。
+- [x] 移除 PWA 更新逻辑后，“检查更新”按钮能够正常注销 Service Worker 并刷新当前页面。
+- [x] `Settings.tsx` 中的预设源不再使用经常被封锁的 `cdn.jsdelivr.net` 或 `dxawi.github.io`，改用如 `fastly.jsdelivr.net` 或 `raw.kkgithub.com` 等稳定 CDN。
+- [x] 预设源获取不再抛出 `Failed to fetch`，因为底层配置了自动重试备用 CDN 的容错机制。
+- [x] 单元测试 (Unit Tests) 在 `npm run test` 或 `vitest run` 时能全部通过。
+- [x] 端到端测试 (E2E Tests) 在 Playwright 中能够覆盖设置页 -> 首页 -> 详情页的基本使用链路并执行成功。
