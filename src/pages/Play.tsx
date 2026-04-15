@@ -29,6 +29,7 @@ interface VideoDetail {
 type DecoderMode = 'auto' | 'hlsjs' | 'native'
 type SkipMarks = { introEnd?: number; outroStart?: number }
 type EpisodeOrder = 'asc' | 'desc'
+type RouteMode = 'direct' | 'proxy'
 
 type PlayerPrefsV1 = {
   version: 1
@@ -127,6 +128,17 @@ const toProxyUrl = (raw: string): string => {
   return `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`
 }
 
+const toMediaProxyUrl = (raw: string): string => {
+  const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
+  if (useLocalProxy) return `/proxy?ua=tvbox&url=${encodeURIComponent(raw)}`
+  const httpProxy = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
+  if (!httpProxy) return raw
+  const sep = httpProxy.includes('?') ? '&' : '?'
+  return `${httpProxy}${sep}url=${encodeURIComponent(raw)}`
+}
+
+const hasMediaProxy = (raw: string): boolean => toMediaProxyUrl(raw) !== raw
+
 const getMarkKey = (siteKey: string, vodId: string | number, sourceIndex: number): string => `${siteKey}|${vodId}|${sourceIndex}`
 
 const getMarks = (prefs: PlayerPrefsV1, key: string): SkipMarks => {
@@ -177,6 +189,95 @@ const detectStreamKind = async (raw: string): Promise<'hls' | 'direct'> => {
   } finally {
     clearTimeout(timer)
   }
+}
+
+const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
+
+const probeHlsByFetch = async (url: string, timeoutMs: number): Promise<{ ok: boolean; ms: number }> => {
+  const start = nowMs()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-2047' },
+      signal: controller.signal,
+    })
+    if (!res.ok) return { ok: false, ms: Math.round(nowMs() - start) }
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
+      return { ok: true, ms: Math.round(nowMs() - start) }
+    }
+    const buf = await res.arrayBuffer()
+    const text = new TextDecoder('utf-8').decode(buf).trimStart()
+    if (text.startsWith('#EXTM3U')) return { ok: true, ms: Math.round(nowMs() - start) }
+    return { ok: false, ms: Math.round(nowMs() - start) }
+  } catch {
+    return { ok: false, ms: Math.round(nowMs() - start) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const probeVideoByElement = async (url: string, timeoutMs: number): Promise<{ ok: boolean; ms: number }> => {
+  const start = nowMs()
+  if (typeof document === 'undefined') return { ok: false, ms: Math.round(nowMs() - start) }
+  const video = document.createElement('video')
+  video.preload = 'metadata'
+  video.muted = true
+  video.playsInline = true
+
+  const cleanup = () => {
+    try {
+      video.pause()
+    } catch {}
+    video.removeAttribute('src')
+    try {
+      video.load()
+    } catch {}
+  }
+
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve({ ok: false, ms: Math.round(nowMs() - start) })
+    }, timeoutMs)
+
+    const done = (ok: boolean) => {
+      clearTimeout(timer)
+      cleanup()
+      resolve({ ok, ms: Math.round(nowMs() - start) })
+    }
+
+    video.addEventListener('loadedmetadata', () => done(true), { once: true })
+    video.addEventListener('error', () => done(false), { once: true })
+    video.src = url
+    try {
+      video.load()
+    } catch {
+      done(false)
+    }
+  })
+}
+
+const pickBestRoute = async (raw: string, isHls: boolean, useHlsJs: boolean): Promise<RouteMode> => {
+  const candidates: Array<{ mode: RouteMode; url: string }> = [{ mode: 'direct', url: raw }]
+  if (hasMediaProxy(raw)) candidates.push({ mode: 'proxy', url: toMediaProxyUrl(raw) })
+  if (candidates.length === 1) return 'direct'
+
+  const probes = candidates.map(async (c) => {
+    if (isHls && useHlsJs) {
+      const r = await probeHlsByFetch(c.url, 4_000)
+      return { ...c, ...r }
+    }
+    const r = await probeVideoByElement(c.url, 4_000)
+    return { ...c, ...r }
+  })
+
+  const results = await Promise.all(probes)
+  const ok = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms)
+  if (ok.length) return ok[0].mode
+  return hasMediaProxy(raw) ? 'proxy' : 'direct'
 }
 
 /**
@@ -239,6 +340,7 @@ const Play: React.FC = () => {
   const playerContainerRef = useRef<HTMLDivElement>(null)
   const artRef = useRef<any>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const routeRef = useRef<RouteMode>('direct')
   const [playerLoading, setPlayerLoading] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
   const [episodeOrder, setEpisodeOrder] = useState<EpisodeOrder>(() => loadPrefs().episodeOrder)
@@ -397,7 +499,9 @@ const Play: React.FC = () => {
 
       const preferNative = prefs.decoder === 'native' || (prefs.decoder === 'auto' && canNativeHls)
       const useHlsJs = isHls && (prefs.decoder === 'hlsjs' || (prefs.decoder === 'auto' && !preferNative))
-      const initUrl = useHlsJs ? playUrl : toProxyUrl(playUrl)
+      const route = await pickBestRoute(playUrl, isHls, useHlsJs)
+      routeRef.current = route
+      const initUrl = useHlsJs ? playUrl : (route === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
 
       const art = new Artplayer({
         container,
@@ -445,7 +549,8 @@ const Play: React.FC = () => {
                 hlsRef.current = null
               }
               art.type = nextUseHlsJs ? 'm3u8' : ''
-              art.switchUrl(nextUseHlsJs ? playUrl : toProxyUrl(playUrl))
+              const nextUrl = nextUseHlsJs ? playUrl : (routeRef.current === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
+              art.switchUrl(nextUrl)
               art.notice.show = `解码器：${decoder === 'hlsjs' ? 'Hls.js' : decoder === 'native' ? '原生' : '自动'}`
             },
           },
@@ -510,14 +615,14 @@ const Play: React.FC = () => {
               hlsRef.current = null
             }
             if (!Hls.isSupported()) {
-              video.src = toProxyUrl(url)
+              video.src = routeRef.current === 'proxy' ? toMediaProxyUrl(url) : url
               return
             }
             const hls = new Hls({
               enableWorker: true,
               backBufferLength: 30,
               xhrSetup: (xhr, reqUrl) => {
-                xhr.open('GET', toProxyUrl(reqUrl), true)
+                xhr.open('GET', routeRef.current === 'proxy' ? toMediaProxyUrl(reqUrl) : reqUrl, true)
               },
             })
             hlsRef.current = hls
