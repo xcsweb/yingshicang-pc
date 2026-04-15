@@ -42,6 +42,10 @@ const getHttpProxy = (): string => {
 
 const generateFallbackUrls = (url: string): string[] => {
   const urls = [url]
+  if (url.startsWith('local://')) {
+    // 对内置的 local 协议，不做回退
+    return urls
+  }
   if (url.includes('fastly.jsdelivr.net') && (url.endsWith('.json') || url.endsWith('.txt'))) {
     const match = url.match(/fastly\.jsdelivr\.net\/gh\/([^/]+)\/([^@/]+)(?:@([^/]+))?\/(.+)$/i)
     if (match) {
@@ -68,6 +72,21 @@ const _fetchText = async (url: string, options?: RequestInit): Promise<FetchResu
   try {
     const normalizedUrl = normalizeUrl(url)
     if (normalizedUrl.includes('mock.api')) return { success: true, data: '' }
+
+    // 处理内置 local:// 协议，直接读取 public 目录下的文件
+    if (url.startsWith('local://')) {
+      const fileName = url.replace('local://', '')
+      const basePath = typeof import.meta !== 'undefined' && (import.meta as any).env?.BASE_URL 
+        ? (import.meta as any).env.BASE_URL 
+        : '/'
+      const cleanBasePath = basePath.endsWith('/') ? basePath : `${basePath}/`
+      const fetchUrl = `${cleanBasePath}${fileName}`
+      
+      const response = await fetch(fetchUrl, options)
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const buffer = await response.arrayBuffer()
+      return { success: true, data: decodeMaybeGb18030(buffer) }
+    }
 
     const useLocalProxy = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.DEV)
     if (useLocalProxy) {
@@ -179,6 +198,19 @@ const _fetchData = async <T = any>(url: string, options?: RequestInit & { noCach
               { vod_id: 1, vod_name: "Test Movie", vod_pic: "https://via.placeholder.com/150", vod_remarks: "HD", vod_play_from: "m3u8$$$mp4", vod_play_url: "第1集$http://mock.mp4#第2集$http://mock.mp4" }
           ]
       });
+    } else if (url.startsWith('local://')) {
+      // 处理内置 local:// 协议，直接读取 public 目录下的文件
+      const fileName = url.replace('local://', '')
+      const basePath = typeof import.meta !== 'undefined' && (import.meta as any).env?.BASE_URL 
+        ? (import.meta as any).env.BASE_URL 
+        : '/'
+      const cleanBasePath = basePath.endsWith('/') ? basePath : `${basePath}/`
+      const fetchUrl = `${cleanBasePath}${fileName}`
+      
+      const response = await fetch(fetchUrl, fetchOptions)
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const buffer = await response.arrayBuffer()
+      text = decodeMaybeGb18030(buffer)
     } else {
       const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
       if (useLocalProxy) {

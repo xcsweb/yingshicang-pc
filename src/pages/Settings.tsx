@@ -4,8 +4,8 @@ import { useDataSourceStore, type Site } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 
 const PRESET_URLS = [
-  { name: 'dxawi', url: 'https://fastly.jsdelivr.net/gh/dxawi/0@main/0.json' },
-  { name: 'jyoketsu', url: 'https://fastly.jsdelivr.net/gh/jyoketsu/tv@main/m.json' },
+  { name: 'dxawi', url: 'local://dxawi.json' },
+  { name: 'jyoketsu', url: 'local://jyoketsu.json' },
   // 注：以下大部分盒子迷源为 type=3 爬虫源，当前项目不支持。
   // 仅保留一个作为直播示例，或你可以添加自己维护的可用 CMS 源。
   { name: '盒子迷-直播', url: 'https://盒子迷.top/ZB' },
