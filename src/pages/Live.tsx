@@ -38,7 +38,7 @@ const isLikelyHlsUrl = (raw: string): boolean => {
   return lower.includes('.m3u8') || lower.includes('m3u8')
 }
 
-const toProxyUrl = (raw: string): string => {
+const toMediaProxyUrl = (raw: string): string => {
   const useLocalProxy = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
   if (useLocalProxy) return `/proxy?ua=tvbox&url=${encodeURIComponent(raw)}`
   const httpProxy = typeof import.meta !== 'undefined' ? String((import.meta as any).env?.VITE_HTTP_PROXY || '').trim() : ''
@@ -46,8 +46,10 @@ const toProxyUrl = (raw: string): string => {
     const sep = httpProxy.includes('?') ? '&' : '?'
     return `${httpProxy}${sep}url=${encodeURIComponent(raw)}`
   }
-  return `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`
+  return raw
 }
+
+const hasMediaProxy = (raw: string): boolean => toMediaProxyUrl(raw) !== raw
 
 const parseLiveList = (text: string): LiveGroup[] => {
   const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
@@ -90,6 +92,8 @@ const Live: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [rawText, setRawText] = useState<string>('')
+  const [playerLoading, setPlayerLoading] = useState(false)
+  const [playerError, setPlayerError] = useState<string | null>(null)
 
   const groups = useMemo(() => parseLiveList(rawText), [rawText])
   const flatChannels = useMemo(() => groups.flatMap(g => g.channels.map(c => ({ ...c, group: g.name }))), [groups])
@@ -133,6 +137,9 @@ const Live: React.FC = () => {
     if (!ch) return
     if (!playerContainerRef.current) return
 
+    setPlayerLoading(true)
+    setPlayerError(null)
+
     if (artRef.current) {
       artRef.current.destroy(false)
       artRef.current = null
@@ -147,12 +154,21 @@ const Live: React.FC = () => {
 
     const url = ch.url.trim()
     const isHls = isLikelyHlsUrl(url)
-    const initUrl = isHls ? url : toProxyUrl(url)
+    const useProxy = hasMediaProxy(url)
+    const httpsPage = typeof window !== 'undefined' && window.location.protocol === 'https:'
+    const httpStream = url.startsWith('http://')
+    if (!useProxy && httpsPage && httpStream) {
+      setPlayerLoading(false)
+      setPlayerError('当前直播源为 HTTP，HTTPS 页面无法直连播放，请配置代理')
+      return
+    }
+    const initUrl = useProxy ? toMediaProxyUrl(url) : url
 
     const art = new Artplayer({
       container,
       url: initUrl,
       autoplay: true,
+      autoSize: false,
       setting: true,
       playbackRate: true,
       hotkey: true,
@@ -173,21 +189,35 @@ const Live: React.FC = () => {
             hlsRef.current = null
           }
           if (!Hls.isSupported()) {
-            video.src = toProxyUrl(u)
+            video.src = useProxy ? toMediaProxyUrl(u) : u
             return
           }
           const hls = new Hls({
             enableWorker: true,
             backBufferLength: 30,
             xhrSetup: (xhr, reqUrl) => {
-              xhr.open('GET', toProxyUrl(reqUrl), true)
+              xhr.open('GET', useProxy ? toMediaProxyUrl(reqUrl) : reqUrl, true)
             },
+          })
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            if (data?.fatal) {
+              setPlayerLoading(false)
+              setPlayerError('直播加载失败')
+            }
           })
           hlsRef.current = hls
           hls.loadSource(u)
           hls.attachMedia(video)
         },
       },
+    })
+
+    art.on('ready', () => setPlayerLoading(false))
+    art.on('video:waiting', () => setPlayerLoading(true))
+    art.on('video:playing', () => setPlayerLoading(false))
+    art.on('error', () => {
+      setPlayerLoading(false)
+      setPlayerError('直播加载失败')
     })
 
     artRef.current = art
@@ -226,8 +256,20 @@ const Live: React.FC = () => {
 
       <main className="flex-1 max-w-[1400px] mx-auto w-full p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6 lg:gap-8">
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="bg-black rounded-xl overflow-hidden shadow-lg mb-4 aspect-video w-full">
+          <div className="bg-black rounded-xl overflow-hidden shadow-lg mb-4 aspect-video w-full relative">
             <div className="w-full h-full" ref={playerContainerRef} />
+            {(playerLoading || playerError) && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
+                {playerError ? (
+                  <span className="text-white text-sm px-4 text-center">{playerError}</span>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span className="text-white text-sm drop-shadow-md">加载中...</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="bg-white rounded-xl border border-bili-border shadow-sm p-4">
@@ -309,4 +351,3 @@ const Live: React.FC = () => {
 }
 
 export default Live
-
