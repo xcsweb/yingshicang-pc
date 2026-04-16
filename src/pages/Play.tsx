@@ -4,6 +4,7 @@ import Artplayer from 'artplayer'
 import Hls from 'hls.js'
 import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
+import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import SmartImage from '../components/SmartImage'
 type AspectRatio = Artplayer['aspectRatio']
 
@@ -675,6 +676,7 @@ const Play: React.FC = () => {
               },
             })
             hlsRef.current = hls
+            enableHlsPrefetch(hls, (reqUrl) => routeRef.current === 'proxy' ? toMediaProxyUrl(reqUrl) : reqUrl, 3)
             hls.loadSource(url)
             hls.attachMedia(video)
           },

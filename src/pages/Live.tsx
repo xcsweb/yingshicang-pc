@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import Artplayer from 'artplayer'
 import Hls from 'hls.js'
 import { fetchText } from '../utils/request'
+import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 
 type LiveChannel = { name: string; url: string }
 type LiveGroup = { name: string; channels: LiveChannel[] }
@@ -206,6 +207,7 @@ const Live: React.FC = () => {
             }
           })
           hlsRef.current = hls
+          enableHlsPrefetch(hls, (reqUrl) => useProxy ? toMediaProxyUrl(reqUrl) : reqUrl, 3)
           hls.loadSource(u)
           hls.attachMedia(video)
         },
