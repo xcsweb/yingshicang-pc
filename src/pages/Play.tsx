@@ -539,7 +539,7 @@ const Play: React.FC = () => {
         container,
         url: initUrl,
         autoplay: true,
-        autoSize: true,
+        autoSize: false,
         setting: true,
         playbackRate: true,
         hotkey: true,
