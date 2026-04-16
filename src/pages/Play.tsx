@@ -696,7 +696,16 @@ const Play: React.FC = () => {
         switchEpisode(currentSourceIndex, nextIndex)
       }
 
-      art.on('ready', () => setPlayerLoading(false))
+      art.on('ready', () => {
+        setPlayerLoading(false)
+        const root = playerContainerRef.current
+        if (!root) return
+        const leftControls = root.querySelector('.art-controls-left')
+        if (!leftControls) return
+        const candidates = Array.from(leftControls.querySelectorAll('.art-control'))
+        const timeEl = candidates.find((el) => (el.textContent || '').includes(' / '))
+        if (timeEl) (timeEl as HTMLElement).classList.add('yc-art-time')
+      })
       art.on('video:waiting', () => setPlayerLoading(true))
       art.on('video:playing', () => {
         setPlayerLoading(false)
@@ -735,19 +744,10 @@ const Play: React.FC = () => {
       })
 
       artRef.current = art
-      queueMicrotask(() => {
-        const root = playerContainerRef.current
-        if (!root) return
-        const leftControls = root.querySelector('.art-controls-left')
-        if (!leftControls) return
-        const candidates = Array.from(leftControls.querySelectorAll('.art-control'))
-        const timeEl = candidates.find((el) => (el.textContent || '').includes(' / '))
-        if (timeEl) (timeEl as HTMLElement).classList.add('yc-art-time')
-      })
       art.controls.add({
         name: 'intro',
         position: 'right',
-        html: '<span class="hidden sm:inline-block" style="font-size:12px;min-width:44px;display:inline-flex;justify-content:center;">设片头</span><span class="sm:hidden" style="font-size:12px;min-width:22px;display:inline-flex;justify-content:center;">头</span>',
+        html: '<span style="font-size:12px;min-width:22px;display:inline-flex;justify-content:center;">头</span>',
         click: () => {
           const prefsNow = loadPrefs()
           const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
@@ -763,7 +763,7 @@ const Play: React.FC = () => {
       art.controls.add({
         name: 'outro',
         position: 'right',
-        html: '<span class="hidden sm:inline-block" style="font-size:12px;min-width:44px;display:inline-flex;justify-content:center;">设片尾</span><span class="sm:hidden" style="font-size:12px;min-width:22px;display:inline-flex;justify-content:center;">尾</span>',
+        html: '<span style="font-size:12px;min-width:22px;display:inline-flex;justify-content:center;">尾</span>',
         click: () => {
           const prefsNow = loadPrefs()
           const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
