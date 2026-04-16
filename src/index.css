@@ -17,6 +17,18 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #cdd0d4;
   }
+
+  .art-video-player .art-controls .art-controls-left {
+    min-width: 0;
+  }
+
+  .art-video-player .art-controls .yc-art-time {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 6px;
+  }
 }
 
 body {
