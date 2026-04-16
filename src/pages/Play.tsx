@@ -27,9 +27,11 @@ interface VideoDetail {
 }
 
 type DecoderMode = 'auto' | 'hlsjs' | 'native'
-type SkipMarks = { introEnd?: number; outroStart?: number }
+type SkipMarks = { introEnd?: number; outroStart?: number; outroLen?: number }
 type EpisodeOrder = 'asc' | 'desc'
 type RouteMode = 'direct' | 'proxy'
+type SpeedStatus = 'idle' | 'testing' | 'ok' | 'fail'
+type SpeedProbe = { status: SpeedStatus; ms?: number }
 
 type PlayerPrefsV1 = {
   version: 1
@@ -146,9 +148,11 @@ const getMarks = (prefs: PlayerPrefsV1, key: string): SkipMarks => {
   if (!marks) return {}
   const introEnd = clampNumber(marks.introEnd, 0, 24 * 3600, 0)
   const outroStart = clampNumber(marks.outroStart, 0, 24 * 3600, 0)
+  const outroLen = clampNumber(marks.outroLen, 0, 24 * 3600, 0)
   const normalized: SkipMarks = {}
   if (introEnd > 0) normalized.introEnd = introEnd
   if (outroStart > 0) normalized.outroStart = outroStart
+  if (outroLen > 0) normalized.outroLen = outroLen
   return normalized
 }
 
@@ -260,10 +264,10 @@ const probeVideoByElement = async (url: string, timeoutMs: number): Promise<{ ok
   })
 }
 
-const pickBestRoute = async (raw: string, isHls: boolean, useHlsJs: boolean): Promise<RouteMode> => {
+const pickBestRoute = async (raw: string, isHls: boolean, useHlsJs: boolean): Promise<{ mode: RouteMode; ok: boolean; ms: number }> => {
   const candidates: Array<{ mode: RouteMode; url: string }> = [{ mode: 'direct', url: raw }]
   if (hasMediaProxy(raw)) candidates.push({ mode: 'proxy', url: toMediaProxyUrl(raw) })
-  if (candidates.length === 1) return 'direct'
+  if (candidates.length === 1) return { mode: 'direct', ok: true, ms: 0 }
 
   const probes = candidates.map(async (c) => {
     if (isHls && useHlsJs) {
@@ -276,8 +280,10 @@ const pickBestRoute = async (raw: string, isHls: boolean, useHlsJs: boolean): Pr
 
   const results = await Promise.all(probes)
   const ok = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms)
-  if (ok.length) return ok[0].mode
-  return hasMediaProxy(raw) ? 'proxy' : 'direct'
+  if (ok.length) return { mode: ok[0].mode, ok: true, ms: ok[0].ms }
+  const fallback: RouteMode = hasMediaProxy(raw) ? 'proxy' : 'direct'
+  const minMs = results.length ? Math.min(...results.map(r => r.ms)) : 0
+  return { mode: fallback, ok: false, ms: minMs }
 }
 
 /**
@@ -343,6 +349,7 @@ const Play: React.FC = () => {
   const routeRef = useRef<RouteMode>('direct')
   const [playerLoading, setPlayerLoading] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
+  const [sourceSpeed, setSourceSpeed] = useState<Record<number, SpeedProbe>>({})
   const [episodeOrder, setEpisodeOrder] = useState<EpisodeOrder>(() => loadPrefs().episodeOrder)
 
   useEffect(() => {
@@ -497,11 +504,36 @@ const Play: React.FC = () => {
         typeof document.createElement === 'function' &&
         document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== ''
 
-      const preferNative = prefs.decoder === 'native' || (prefs.decoder === 'auto' && canNativeHls)
-      const useHlsJs = isHls && (prefs.decoder === 'hlsjs' || (prefs.decoder === 'auto' && !preferNative))
-      const route = await pickBestRoute(playUrl, isHls, useHlsJs)
-      routeRef.current = route
-      const initUrl = useHlsJs ? playUrl : (route === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
+      const chooseDecoderAndRoute = async (decoder: DecoderMode): Promise<{ decoder: DecoderMode; useHlsJs: boolean; route: RouteMode }> => {
+        if (!isHls) {
+          const r = await pickBestRoute(playUrl, false, false)
+          return { decoder, useHlsJs: false, route: r.mode }
+        }
+        if (decoder === 'hlsjs') {
+          const r = await pickBestRoute(playUrl, true, true)
+          return { decoder, useHlsJs: true, route: r.mode }
+        }
+        if (decoder === 'native') {
+          const r = await pickBestRoute(playUrl, true, false)
+          return { decoder, useHlsJs: false, route: r.mode }
+        }
+
+        const candidates: DecoderMode[] = canNativeHls ? ['native', 'hlsjs'] : ['hlsjs']
+        const results = await Promise.all(
+          candidates.map(async (d) => {
+            const use = d === 'hlsjs'
+            const r = await pickBestRoute(playUrl, true, use)
+            return { decoder: d, useHlsJs: use, route: r.mode, ok: r.ok, ms: r.ms }
+          }),
+        )
+        const ok = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms)
+        const best = ok[0] || results.sort((a, b) => a.ms - b.ms)[0]
+        return { decoder: best.decoder, useHlsJs: best.useHlsJs, route: best.route }
+      }
+
+      const selection = await chooseDecoderAndRoute(prefs.decoder)
+      routeRef.current = selection.route
+      const initUrl = selection.useHlsJs ? playUrl : (selection.route === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
 
       const art = new Artplayer({
         container,
@@ -527,7 +559,7 @@ const Play: React.FC = () => {
           'x5-video-player-fullscreen': 'true',
           'x5-video-orientation': 'landscape',
         } as any,
-        type: useHlsJs ? 'm3u8' : '',
+        type: selection.useHlsJs ? 'm3u8' : '',
         settings: [
           {
             name: 'decoder',
@@ -542,16 +574,18 @@ const Play: React.FC = () => {
               if (decoder !== 'auto' && decoder !== 'hlsjs' && decoder !== 'native') return
               const next = { ...prefs, decoder } as PlayerPrefsV1
               savePrefs(next)
-              const nextPreferNative = decoder === 'native' || (decoder === 'auto' && canNativeHls)
-              const nextUseHlsJs = isHls && (decoder === 'hlsjs' || (decoder === 'auto' && !nextPreferNative))
-              if (hlsRef.current) {
-                hlsRef.current.destroy()
-                hlsRef.current = null
-              }
-              art.type = nextUseHlsJs ? 'm3u8' : ''
-              const nextUrl = nextUseHlsJs ? playUrl : (routeRef.current === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
-              art.switchUrl(nextUrl)
-              art.notice.show = `解码器：${decoder === 'hlsjs' ? 'Hls.js' : decoder === 'native' ? '原生' : '自动'}`
+              void (async () => {
+                const picked = await chooseDecoderAndRoute(decoder as DecoderMode)
+                routeRef.current = picked.route
+                if (hlsRef.current) {
+                  hlsRef.current.destroy()
+                  hlsRef.current = null
+                }
+                art.type = picked.useHlsJs ? 'm3u8' : ''
+                const nextUrl = picked.useHlsJs ? playUrl : (picked.route === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
+                art.switchUrl(nextUrl)
+                art.notice.show = `解码器：${picked.decoder === 'hlsjs' ? 'Hls.js' : picked.decoder === 'native' ? '原生' : '自动'}`
+              })()
             },
           },
           {
@@ -598,12 +632,27 @@ const Play: React.FC = () => {
           },
           {
             name: 'outroMark',
-            html: `片尾：${marks.outroStart ? formatSec(marks.outroStart) : '--'}`,
+            html: `片尾：${
+              marks.outroLen
+                ? `末尾${formatSec(marks.outroLen)}`
+                : marks.outroStart
+                  ? formatSec(marks.outroStart)
+                  : '--'
+            }`,
             onClick: () => {
-              const nextMarks = { ...marks, outroStart: undefined }
+              const nextMarks = { ...marks, outroStart: undefined, outroLen: undefined }
               const next = setMarks(prefs, markKey, nextMarks)
               savePrefs(next)
-              art.setting.update({ name: 'outroMark', html: `片尾：${nextMarks.outroStart ? formatSec(nextMarks.outroStart) : '--'}` })
+              art.setting.update({
+                name: 'outroMark',
+                html: `片尾：${
+                  nextMarks.outroLen
+                    ? `末尾${formatSec(nextMarks.outroLen)}`
+                    : nextMarks.outroStart
+                      ? formatSec(nextMarks.outroStart)
+                      : '--'
+                }`,
+              })
               art.notice.show = '已清除片尾'
             },
           },
@@ -664,7 +713,11 @@ const Play: React.FC = () => {
         const latest = loadPrefs()
         if (!latest.autoNext) return
         const latestMarks = getMarks(latest, markKey)
-        const outroStart = latestMarks.outroStart || 0
+        let outroStart = latestMarks.outroStart || 0
+        const outroLen = latestMarks.outroLen || 0
+        if (!outroStart && outroLen > 0 && Number.isFinite(art.duration) && art.duration > 0) {
+          outroStart = Math.max(0, art.duration - outroLen)
+        }
         if (!outroStart) return
         if (outroTriggered) return
         if (art.currentTime + 0.2 < outroStart) return
@@ -684,7 +737,7 @@ const Play: React.FC = () => {
       artRef.current = art
       art.controls.add({
         name: 'intro',
-        position: 'left',
+        position: 'right',
         html: '<span class="hidden sm:inline-block" style="font-size:12px;">设片头</span><span class="sm:hidden" style="font-size:12px;">头</span>',
         click: () => {
           const prefsNow = loadPrefs()
@@ -700,18 +753,47 @@ const Play: React.FC = () => {
       })
       art.controls.add({
         name: 'outro',
-        position: 'left',
+        position: 'right',
         html: '<span class="hidden sm:inline-block" style="font-size:12px;">设片尾</span><span class="sm:hidden" style="font-size:12px;">尾</span>',
         click: () => {
           const prefsNow = loadPrefs()
           const key = getMarkKey(siteKey || '', vodId || '', currentSourceIndex)
-          const cur = Math.max(0, Math.floor(art.currentTime))
+          const curRaw = Math.max(0, Number(art.currentTime) || 0)
+          const durationRaw = Number(art.duration) || 0
+          if (!Number.isFinite(durationRaw) || durationRaw <= 0) {
+            art.notice.show = '无法获取时长，稍后再试'
+            return
+          }
+          const outroLen = Math.max(0, Math.floor(durationRaw - curRaw))
+          if (!outroLen) {
+            art.notice.show = '已在片尾附近'
+            return
+          }
+          const ok = window.confirm(`是否跳过当前这集片尾并记录片尾长度（${formatSec(outroLen)}）？`)
+          if (!ok) return
           const marksNow = getMarks(prefsNow, key)
-          const nextMarks = { ...marksNow, outroStart: cur }
+          const nextMarks = { ...marksNow, outroStart: undefined, outroLen }
           const next = setMarks(prefsNow, key, nextMarks)
           savePrefs(next)
-          art.setting.update({ name: 'outroMark', html: `片尾：${nextMarks.outroStart ? formatSec(nextMarks.outroStart) : '--'}` })
-          art.notice.show = `片尾已记录：${formatSec(cur)}`
+          art.setting.update({
+            name: 'outroMark',
+            html: `片尾：${
+              nextMarks.outroLen
+                ? `末尾${formatSec(nextMarks.outroLen)}`
+                : nextMarks.outroStart
+                  ? formatSec(nextMarks.outroStart)
+                  : '--'
+            }`,
+          })
+          outroTriggered = true
+          const delta = prefsNow.episodeOrder === 'desc' ? -1 : 1
+          const s = playSources[currentSourceIndex]
+          const nextIndex = currentEpisodeIndex + delta
+          if (s && nextIndex >= 0 && nextIndex < s.episodes.length) {
+            switchEpisode(currentSourceIndex, nextIndex)
+            return
+          }
+          art.currentTime = Math.max(0, durationRaw - 0.05)
         },
       })
     }
@@ -729,6 +811,56 @@ const Play: React.FC = () => {
       }
     }
   }, [playSources, currentSourceIndex, currentEpisodeIndex, detail])
+
+  useEffect(() => {
+    if (!playSources.length) return
+    let cancelled = false
+    setSourceSpeed(() => {
+      const init: Record<number, SpeedProbe> = {}
+      for (let i = 0; i < playSources.length; i++) init[i] = { status: 'testing' }
+      return init
+    })
+
+    const limit = 3
+    let next = 0
+    const workers = Array.from({ length: Math.min(limit, playSources.length) }, async () => {
+      for (;;) {
+        const idx = next
+        next += 1
+        if (idx >= playSources.length) return
+        const ep = playSources[idx]?.episodes?.[0]
+        const raw = ep?.url?.trim() || ''
+        if (!raw || !isHttpUrl(raw)) {
+          if (!cancelled) setSourceSpeed(prev => ({ ...prev, [idx]: { status: 'fail' } }))
+          continue
+        }
+        const start = nowMs()
+        try {
+          const playUrl = await resolvePlayableUrl(raw)
+          if (cancelled) return
+          const kind = await detectStreamKind(playUrl)
+          if (cancelled) return
+          const isHls = kind === 'hls'
+          const route = await pickBestRoute(playUrl, isHls, isHls)
+          if (cancelled) return
+          const ms = Math.max(0, Math.round(nowMs() - start))
+          if (!route.ok) {
+            setSourceSpeed(prev => ({ ...prev, [idx]: { status: 'fail', ms } }))
+          } else {
+            setSourceSpeed(prev => ({ ...prev, [idx]: { status: 'ok', ms } }))
+          }
+        } catch {
+          const ms = Math.max(0, Math.round(nowMs() - start))
+          if (!cancelled) setSourceSpeed(prev => ({ ...prev, [idx]: { status: 'fail', ms } }))
+        }
+      }
+    })
+
+    void Promise.all(workers)
+    return () => {
+      cancelled = true
+    }
+  }, [playSources])
 
   const switchEpisode = (sIndex: number, eIndex: number) => {
     setCurrentSourceIndex(sIndex)
@@ -862,7 +994,14 @@ const Play: React.FC = () => {
                         : 'bg-bili-grayBg text-bili-textLight hover:text-bili-text'
                     }`}
                   >
-                    {source.sourceName}
+                    <span className="inline-flex items-center gap-1">
+                      <span>{source.sourceName}</span>
+                      {sourceSpeed[index]?.status === 'testing' && <span className="opacity-70">…</span>}
+                      {sourceSpeed[index]?.status === 'ok' && typeof sourceSpeed[index]?.ms === 'number' && (
+                        <span className="opacity-80">{sourceSpeed[index]!.ms}ms</span>
+                      )}
+                      {sourceSpeed[index]?.status === 'fail' && <span className="opacity-80">×</span>}
+                    </span>
                   </button>
                 ))}
               </div>
