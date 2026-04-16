@@ -40,6 +40,26 @@
   .art-video-player.art-loading-show .art-mask {
     display: none !important;
   }
+
+  .art-video-player.art-loading-show .art-state,
+  .art-video-player.art-mask-show .art-state {
+    display: none !important;
+  }
+
+  .art-video {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: #000;
+  }
+
+  .art-video video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
 }
 
 body {
