@@ -388,6 +388,33 @@ const Play: React.FC = () => {
 
   const [trafficEnabled, setTrafficEnabled] = useState(() => trafficMonitor.getEnabled())
   const [traffic, setTraffic] = useState<TrafficStats>({ domesticUp: 0, domesticDown: 0, intlUp: 0, intlDown: 0 })
+  const [headphoneConnected, setHeadphoneConnected] = useState(false)
+
+  useEffect(() => {
+    const checkHeadphone = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasHeadphone = devices.some(d => 
+          d.kind === 'audiooutput' && 
+          (d.label.toLowerCase().includes('headphone') || 
+           d.label.toLowerCase().includes('headset') || 
+           d.label.toLowerCase().includes('bluetooth') ||
+           d.label.toLowerCase().includes('airpods') ||
+           d.label.toLowerCase().includes('buds'))
+        );
+        setHeadphoneConnected(hasHeadphone);
+      } catch (e) {
+        console.warn('Failed to enumerate devices', e);
+      }
+    };
+    
+    checkHeadphone();
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', checkHeadphone);
+      return () => navigator.mediaDevices.removeEventListener('devicechange', checkHeadphone);
+    }
+  }, [])
 
   useEffect(() => {
     const unsubscribe = trafficMonitor.subscribe(setTraffic);
@@ -608,9 +635,131 @@ const Play: React.FC = () => {
         screenshot: true,
         mutex: true,
         // 添加移动端专属优化
-        autoOrientation: true, 
-        fastForward: true, 
-        lock: true, 
+        autoOrientation: true,
+        fastForward: true,
+        lock: true,
+        plugins: [
+          (art) => {
+            let startX = 0, startY = 0, isDragging = false, dragType: 'volume' | 'light' | 'progress' | 'none' = 'none';
+            let startVolume = 0, startProgress = 0, currentProgress = 0, startLight = 1;
+            
+            // 亮度遮罩层
+            const lightMask = document.createElement('div');
+            lightMask.style.position = 'absolute';
+            lightMask.style.inset = '0';
+            lightMask.style.backgroundColor = 'rgba(0,0,0,0)';
+            lightMask.style.pointerEvents = 'none';
+            lightMask.style.zIndex = '10';
+            
+            // 提示层
+            const tipEl = document.createElement('div');
+            tipEl.style.position = 'absolute';
+            tipEl.style.top = '50%';
+            tipEl.style.left = '50%';
+            tipEl.style.transform = 'translate(-50%, -50%)';
+            tipEl.style.background = 'rgba(0,0,0,0.6)';
+            tipEl.style.color = 'white';
+            tipEl.style.padding = '10px 20px';
+            tipEl.style.borderRadius = '8px';
+            tipEl.style.fontSize = '14px';
+            tipEl.style.display = 'none';
+            tipEl.style.zIndex = '50';
+            
+            art.on('ready', () => {
+              art.template.$player.appendChild(lightMask);
+              art.template.$player.appendChild(tipEl);
+              
+              // 耳机状态图标注入到播放器右上角
+              const headphoneIcon = document.createElement('div');
+              headphoneIcon.style.position = 'absolute';
+              headphoneIcon.style.top = '10px';
+              headphoneIcon.style.right = '10px';
+              headphoneIcon.style.zIndex = '40';
+              headphoneIcon.style.display = 'none';
+              headphoneIcon.innerHTML = '<svg style="width:24px;height:24px;color:rgba(255,255,255,0.8);drop-shadow(0 2px 4px rgba(0,0,0,0.5))" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6c3.314 0 6 2.686 6 6v4a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h1a4 4 0 00-8 0h1a1 1 0 011 1v4a1 1 0 01-1 1H8a2 2 0 01-2-2v-4c0-3.314 2.686-6 6-6z"></path></svg>';
+              art.template.$player.appendChild(headphoneIcon);
+
+              let checkInterval = setInterval(() => {
+                if (document.querySelector('h1')?.textContent?.includes('耳机模式')) {
+                  headphoneIcon.style.display = 'block';
+                } else {
+                  headphoneIcon.style.display = 'none';
+                }
+              }, 1000);
+
+              art.on('destroy', () => clearInterval(checkInterval));
+              
+              const playerEl = art.template.$player; // 改为绑定到整个播放器容器以获取更好的滑动体验
+              
+              playerEl.addEventListener('touchstart', (e: TouchEvent) => {
+                if (e.touches.length !== 1) return;
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+                isDragging = true;
+                dragType = 'none';
+                startVolume = art.volume;
+                startProgress = art.currentTime;
+                currentProgress = startProgress;
+              });
+
+              playerEl.addEventListener('touchmove', (e: TouchEvent) => {
+                if (!isDragging) return;
+                const currentX = e.touches[0].clientX;
+                const currentY = e.touches[0].clientY;
+                const diffX = currentX - startX;
+                const diffY = currentY - startY;
+                
+                // 判断滑动方向
+                if (dragType === 'none') {
+                  if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 10) {
+                    dragType = 'progress';
+                  } else if (Math.abs(diffY) > Math.abs(diffX) && Math.abs(diffY) > 10) {
+                    const rect = playerEl.getBoundingClientRect();
+                    if (startX > rect.left + rect.width / 2) {
+                      dragType = 'volume'; // 右侧上下滑
+                    } else {
+                      dragType = 'light'; // 左侧上下滑
+                    }
+                  }
+                }
+                
+                if (dragType === 'progress') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = diffX / playerEl.clientWidth;
+                  const delta = percent * 90; // 最大快进/退 90s
+                  currentProgress = Math.max(0, Math.min(art.duration || 0, startProgress + delta));
+                  tipEl.textContent = `${formatSec(currentProgress)} / ${formatSec(art.duration || 0)}`;
+                  tipEl.style.display = 'block';
+                } else if (dragType === 'volume') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = -diffY / playerEl.clientHeight;
+                  let newVol = Math.max(0, Math.min(1, startVolume + percent));
+                  art.volume = newVol;
+                  tipEl.textContent = `音量: ${Math.round(newVol * 100)}%`;
+                  tipEl.style.display = 'block';
+                } else if (dragType === 'light') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = diffY / playerEl.clientHeight;
+                  startLight = Math.max(0, Math.min(0.8, startLight + percent * 0.1)); // max dark 0.8
+                  lightMask.style.backgroundColor = `rgba(0,0,0,${startLight})`;
+                  tipEl.textContent = `亮度: ${Math.round((1 - startLight) * 100)}%`;
+                  tipEl.style.display = 'block';
+                  startY = currentY; // 重置Y以实现增量计算
+                }
+              }, { passive: false });
+
+              playerEl.addEventListener('touchend', () => {
+                if (dragType === 'progress') {
+                  art.currentTime = currentProgress;
+                }
+                isDragging = false;
+                dragType = 'none';
+                tipEl.style.display = 'none';
+              });
+            });
+            return { name: 'mobileGestures' };
+          }
+        ],
         moreVideoAttr: {
           playsInline: true,
           preload: 'metadata',
@@ -1101,8 +1250,14 @@ const Play: React.FC = () => {
             </div>
             
             <div className="mb-4 sm:mb-6 px-4 sm:px-0 pt-4 sm:pt-0">
-              <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2">
+              <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2 flex items-center gap-2">
                 {detail?.vod_name}
+                {headphoneConnected && (
+                  <span className="inline-flex items-center justify-center bg-bili-blue/10 text-bili-blue px-2 py-0.5 rounded text-xs" title="耳机已连接">
+                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6c3.314 0 6 2.686 6 6v4a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h1a4 4 0 00-8 0h1a1 1 0 011 1v4a1 1 0 01-1 1H8a2 2 0 01-2-2v-4c0-3.314 2.686-6 6-6z"></path></svg>
+                    耳机模式
+                  </span>
+                )}
               </h1>
               <div className="flex items-center text-sm text-bili-textLight gap-4">
                 <span className="flex items-center gap-1">
