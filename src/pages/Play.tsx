@@ -670,7 +670,9 @@ const Play: React.FC = () => {
             }
             const hls = new Hls({
               enableWorker: true,
-              backBufferLength: 30,
+              backBufferLength: 30, // 允许保留过往 30 秒的视频缓存
+              maxBufferLength: 60, // 增加向前缓冲时长到 60 秒，保证 Seek 后的连贯性
+              maxMaxBufferLength: 90, // 允许最大缓冲 90 秒
               xhrSetup: (xhr, reqUrl) => {
                 xhr.open('GET', routeRef.current === 'proxy' ? toMediaProxyUrl(reqUrl) : reqUrl, true)
               },
