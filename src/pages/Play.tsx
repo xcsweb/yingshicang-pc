@@ -6,7 +6,6 @@ import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import SmartImage from '../components/SmartImage'
-import { upsertWatchHistory } from '../utils/watchHistory'
 type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
@@ -487,20 +486,6 @@ const Play: React.FC = () => {
       return
     }
 
-    if (detail && siteKey && vodId) {
-      const itemId = `${siteKey}|${vodId}|${currentSourceIndex}|${currentEpisodeIndex}`
-      upsertWatchHistory({
-        id: itemId,
-        siteKey,
-        vodId,
-        vodName: detail.vod_name || String(vodId),
-        vodPic: detail.vod_pic || '',
-        sourceIndex: currentSourceIndex,
-        episodeIndex: currentEpisodeIndex,
-        episodeName: episode.name || '正片',
-      })
-    }
-
     let cancelled = false
     const start = async () => {
       const playUrl = await resolvePlayableUrl(safeUrl)
@@ -685,7 +670,9 @@ const Play: React.FC = () => {
             }
             const hls = new Hls({
               enableWorker: true,
-              backBufferLength: 30,
+              backBufferLength: 30, // 允许保留过往 30 秒的视频缓存
+              maxBufferLength: 60, // 增加向前缓冲时长到 60 秒，保证 Seek 后的连贯性
+              maxMaxBufferLength: 90, // 允许最大缓冲 90 秒
               xhrSetup: (xhr, reqUrl) => {
                 xhr.open('GET', routeRef.current === 'proxy' ? toMediaProxyUrl(reqUrl) : reqUrl, true)
               },
