@@ -685,6 +685,41 @@ const Play: React.FC = () => {
 
       if (prefs.aspectRatio) art.aspectRatio = prefs.aspectRatio
 
+      // 耳机状态图标注入到播放器右上角
+      const headphoneIcon = document.createElement('div');
+      headphoneIcon.style.position = 'absolute';
+      headphoneIcon.style.top = '20px';
+      headphoneIcon.style.right = '20px';
+      headphoneIcon.style.zIndex = '50';
+      headphoneIcon.style.display = 'none';
+      headphoneIcon.style.pointerEvents = 'none';
+      headphoneIcon.innerHTML = '<svg style="width:28px;height:28px;color:rgba(255,255,255,0.9);filter:drop-shadow(0 2px 4px rgba(0,0,0,0.6))" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6c3.314 0 6 2.686 6 6v4a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h1a4 4 0 00-8 0h1a1 1 0 011 1v4a1 1 0 01-1 1H8a2 2 0 01-2-2v-4c0-3.314 2.686-6 6-6z"></path></svg>';
+
+      // 流量统计层注入到播放器左上角
+      const trafficLayer = document.createElement('div');
+      trafficLayer.style.position = 'absolute';
+      trafficLayer.style.top = '20px';
+      trafficLayer.style.left = '20px';
+      trafficLayer.style.zIndex = '50';
+      trafficLayer.style.pointerEvents = 'none';
+      trafficLayer.style.display = 'none';
+      trafficLayer.className = 'yc-traffic-layer';
+
+      if (art.template && art.template.$player) {
+        art.template.$player.appendChild(headphoneIcon);
+        art.template.$player.appendChild(trafficLayer);
+      }
+
+      let checkInterval = setInterval(() => {
+        if (document.querySelector('h1')?.textContent?.includes('耳机模式')) {
+          headphoneIcon.style.display = 'block';
+        } else {
+          headphoneIcon.style.display = 'none';
+        }
+      }, 1000);
+
+      art.on('destroy', () => clearInterval(checkInterval));
+
       let introApplied = false
       let outroTriggered = false
 
@@ -872,6 +907,37 @@ const Play: React.FC = () => {
       cancelled = true
     }
   }, [playSources])
+
+  useEffect(() => {
+    if (!artRef.current || !trafficEnabled) return;
+    const html = `
+      <div style="background:rgba(0,0,0,0.6);color:white;font-size:12px;padding:12px;border-radius:4px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);display:flex;flex-direction:column;gap:6px;pointer-events:none;user-select:none;">
+        <div style="font-weight:500;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:4px;color:#00aeec;display:flex;align-items:center;gap:4px;">
+          <svg style="width:12px;height:12px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+          流量监控 (实时)
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国内下行:</span><span style="font-family:monospace;">${formatBytes(traffic.domesticDown)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国内上行:</span><span style="font-family:monospace;">${formatBytes(traffic.domesticUp)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国外下行:</span><span style="font-family:monospace;">${formatBytes(traffic.intlDown)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国外上行:</span><span style="font-family:monospace;">${formatBytes(traffic.intlUp)}</span></div>
+      </div>
+    `;
+    
+    if (artRef.current.template?.$player) {
+      const layer = artRef.current.template.$player.querySelector('.yc-traffic-layer') as HTMLElement;
+      if (layer) {
+        layer.innerHTML = html;
+        layer.style.display = 'block';
+      }
+    }
+  }, [traffic, trafficEnabled]);
+
+  useEffect(() => {
+    if (!trafficEnabled && artRef.current?.template?.$player) {
+      const layer = artRef.current.template.$player.querySelector('.yc-traffic-layer') as HTMLElement;
+      if (layer) layer.style.display = 'none';
+    }
+  }, [trafficEnabled]);
 
   const switchEpisode = (sIndex: number, eIndex: number) => {
     setCurrentSourceIndex(sIndex)
