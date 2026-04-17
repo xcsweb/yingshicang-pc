@@ -8,7 +8,8 @@ import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import { upsertWatchHistory, loadWatchHistory } from '../utils/watchHistory'
 import SmartImage from '../components/SmartImage'
 import { filterM3u8Ads } from '../utils/adFilter'
-import { trafficMonitor, TrafficStats } from '../utils/trafficMonitor'
+import { trafficMonitor } from '../utils/trafficMonitor'
+import type { TrafficStats } from '../utils/trafficMonitor'
 import { wakeLockManager } from '../utils/wakeLock'
 
 type AspectRatio = Artplayer['aspectRatio']
@@ -389,7 +390,10 @@ const Play: React.FC = () => {
   const [traffic, setTraffic] = useState<TrafficStats>({ domesticUp: 0, domesticDown: 0, intlUp: 0, intlDown: 0 })
 
   useEffect(() => {
-    return trafficMonitor.subscribe(setTraffic)
+    const unsubscribe = trafficMonitor.subscribe(setTraffic);
+    return () => {
+      unsubscribe();
+    };
   }, [])
 
   useEffect(() => {
