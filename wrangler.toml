@@ -1,6 +1,7 @@
 name = "yingshicang"
 main = "proxy/cloudflare-worker.js"
 compatibility_date = "2024-04-05"
+account_id = "9f25816b02831dea13e22b6cd3d84fb1"
 
 [placement]
 mode = "smart"
