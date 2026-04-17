@@ -6,6 +6,7 @@ import Settings from './pages/Settings'
 import Detail from './pages/Detail'
 import Play from './pages/Play'
 import Live from './pages/Live'
+import History from './pages/History'
 import { useDataSourceStore } from './store/dataSource'
 import { fetchData } from './utils/request'
 
@@ -55,6 +56,7 @@ function App() {
         <Route path="/detail/:siteKey/:vodId" element={<Detail />} />
         <Route path="/play/:siteKey/:vodId/:sourceIndex/:episodeIndex" element={<Play />} />
         <Route path="/live" element={<Live />} />
+        <Route path="/history" element={<History />} />
         <Route path="/about" element={<About />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>

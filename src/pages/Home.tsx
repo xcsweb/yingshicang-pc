@@ -267,6 +267,13 @@ const Home: React.FC = () => {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14m-6 0h3a2 2 0 002-2V8a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm-2 7h8"></path></svg>
             <span className="hidden sm:inline">直播</span>
           </button>
+          <button
+            onClick={() => navigate('/history')}
+            className="flex items-center gap-1.5 text-sm text-bili-textLight hover:text-bili-text transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <span className="hidden sm:inline">历史</span>
+          </button>
           <button 
             onClick={() => navigate('/settings')}
             className="flex items-center gap-1.5 text-sm text-bili-textLight hover:text-bili-text transition-colors"
@@ -310,6 +317,29 @@ const Home: React.FC = () => {
                 <option key={site.key} value={site.key}>{site.name}</option>
               ))}
             </select>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => { setIsMobileMenuOpen(false); navigate('/history') }}
+              className="px-3 py-2 text-sm rounded-lg bg-bili-grayBg text-bili-text hover:bg-gray-200 transition-colors"
+            >
+              历史
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIsMobileMenuOpen(false); navigate('/live') }}
+              className="px-3 py-2 text-sm rounded-lg bg-bili-grayBg text-bili-text hover:bg-gray-200 transition-colors"
+            >
+              直播
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIsMobileMenuOpen(false); navigate('/settings') }}
+              className="px-3 py-2 text-sm rounded-lg bg-bili-grayBg text-bili-text hover:bg-gray-200 transition-colors"
+            >
+              设置
+            </button>
           </div>
         </div>
       )}

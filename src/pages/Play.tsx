@@ -6,6 +6,7 @@ import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import SmartImage from '../components/SmartImage'
+import { upsertWatchHistory } from '../utils/watchHistory'
 type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
@@ -484,6 +485,20 @@ const Play: React.FC = () => {
       setPlayerLoading(false)
       setPlayerError('播放地址无效')
       return
+    }
+
+    if (detail && siteKey && vodId) {
+      const itemId = `${siteKey}|${vodId}|${currentSourceIndex}|${currentEpisodeIndex}`
+      upsertWatchHistory({
+        id: itemId,
+        siteKey,
+        vodId,
+        vodName: detail.vod_name || String(vodId),
+        vodPic: detail.vod_pic || '',
+        sourceIndex: currentSourceIndex,
+        episodeIndex: currentEpisodeIndex,
+        episodeName: episode.name || '正片',
+      })
     }
 
     let cancelled = false
