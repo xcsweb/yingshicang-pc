@@ -553,6 +553,111 @@ const Play: React.FC = () => {
         autoOrientation: true, 
         fastForward: true, 
         lock: true, 
+        plugins: [
+          (art) => {
+            let startX = 0, startY = 0, isDragging = false, dragType: 'volume' | 'light' | 'progress' | 'none' = 'none';
+            let startVolume = 0, startProgress = 0, currentProgress = 0, startLight = 1;
+            
+            const lightMask = document.createElement('div');
+            lightMask.style.position = 'absolute';
+            lightMask.style.inset = '0';
+            lightMask.style.backgroundColor = 'rgba(0,0,0,0)';
+            lightMask.style.pointerEvents = 'none';
+            lightMask.style.zIndex = '50';
+            
+            const tipEl = document.createElement('div');
+            tipEl.style.position = 'absolute';
+            tipEl.style.top = '50%';
+            tipEl.style.left = '50%';
+            tipEl.style.transform = 'translate(-50%, -50%)';
+            tipEl.style.background = 'rgba(0,0,0,0.6)';
+            tipEl.style.color = 'white';
+            tipEl.style.padding = '10px 20px';
+            tipEl.style.borderRadius = '8px';
+            tipEl.style.fontSize = '14px';
+            tipEl.style.display = 'none';
+            tipEl.style.zIndex = '9999';
+            
+            art.on('fullscreenError', () => {
+        art.fullscreenWeb = true;
+        art.notice.show = '由于浏览器限制，已为您切换为网页全屏';
+      })
+
+      art.on('ready', () => {
+              art.template.$player.appendChild(lightMask);
+              art.template.$player.appendChild(tipEl);
+              
+              // 绑定到 video 元素上，防止拦截控制栏的点击事件（如全屏按钮）
+              const playerEl = art.template.$video; 
+              
+              playerEl.addEventListener('touchstart', (e: TouchEvent) => {
+                if (e.touches.length !== 1) return;
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+                isDragging = true;
+                dragType = 'none';
+                startVolume = art.volume;
+                startProgress = art.currentTime;
+                currentProgress = startProgress;
+              });
+
+              playerEl.addEventListener('touchmove', (e: TouchEvent) => {
+                if (!isDragging) return;
+                const currentX = e.touches[0].clientX;
+                const currentY = e.touches[0].clientY;
+                const diffX = currentX - startX;
+                const diffY = currentY - startY;
+                
+                if (dragType === 'none') {
+                  if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 10) {
+                    dragType = 'progress';
+                  } else if (Math.abs(diffY) > Math.abs(diffX) && Math.abs(diffY) > 10) {
+                    const rect = playerEl.getBoundingClientRect();
+                    if (startX > rect.left + rect.width / 2) {
+                      dragType = 'volume';
+                    } else {
+                      dragType = 'light';
+                    }
+                  }
+                }
+                
+                if (dragType === 'progress') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = diffX / playerEl.clientWidth;
+                  const delta = percent * 90;
+                  currentProgress = Math.max(0, Math.min(art.duration || 0, startProgress + delta));
+                  tipEl.textContent = `${formatSec(currentProgress)} / ${formatSec(art.duration || 0)}`;
+                  tipEl.style.display = 'block';
+                } else if (dragType === 'volume') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = -diffY / playerEl.clientHeight;
+                  let newVol = Math.max(0, Math.min(1, startVolume + percent));
+                  art.volume = newVol;
+                  tipEl.textContent = `音量: ${Math.round(newVol * 100)}%`;
+                  tipEl.style.display = 'block';
+                } else if (dragType === 'light') {
+                  if (e.cancelable) e.preventDefault();
+                  const percent = diffY / playerEl.clientHeight;
+                  startLight = Math.max(0, Math.min(0.8, startLight + percent * 0.1));
+                  lightMask.style.backgroundColor = `rgba(0,0,0,${startLight})`;
+                  tipEl.textContent = `亮度: ${Math.round((1 - startLight) * 100)}%`;
+                  tipEl.style.display = 'block';
+                  startY = currentY;
+                }
+              }, { passive: false });
+
+              playerEl.addEventListener('touchend', () => {
+                if (dragType === 'progress') {
+                  art.currentTime = currentProgress;
+                }
+                isDragging = false;
+                dragType = 'none';
+                tipEl.style.display = 'none';
+              });
+            });
+            return { name: 'mobileGestures' };
+          }
+        ],
         moreVideoAttr: {
           playsInline: true,
           preload: 'metadata',
@@ -688,9 +793,9 @@ const Play: React.FC = () => {
       // 耳机状态图标注入到播放器右上角
       const headphoneIcon = document.createElement('div');
       headphoneIcon.style.position = 'absolute';
-      headphoneIcon.style.top = '20px';
-      headphoneIcon.style.right = '20px';
-      headphoneIcon.style.zIndex = '50';
+      headphoneIcon.style.top = '10px';
+      headphoneIcon.style.right = '10px';
+      headphoneIcon.style.zIndex = '9999';
       headphoneIcon.style.display = 'none';
       headphoneIcon.style.pointerEvents = 'none';
       headphoneIcon.innerHTML = '<svg style="width:28px;height:28px;color:rgba(255,255,255,0.9);filter:drop-shadow(0 2px 4px rgba(0,0,0,0.6))" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6c3.314 0 6 2.686 6 6v4a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h1a4 4 0 00-8 0h1a1 1 0 011 1v4a1 1 0 01-1 1H8a2 2 0 01-2-2v-4c0-3.314 2.686-6 6-6z"></path></svg>';
@@ -698,9 +803,9 @@ const Play: React.FC = () => {
       // 流量统计层注入到播放器左上角
       const trafficLayer = document.createElement('div');
       trafficLayer.style.position = 'absolute';
-      trafficLayer.style.top = '20px';
-      trafficLayer.style.left = '20px';
-      trafficLayer.style.zIndex = '50';
+      trafficLayer.style.top = '10px';
+      trafficLayer.style.left = '10px';
+      trafficLayer.style.zIndex = '9999';
       trafficLayer.style.pointerEvents = 'none';
       trafficLayer.style.display = 'none';
       trafficLayer.className = 'yc-traffic-layer';
