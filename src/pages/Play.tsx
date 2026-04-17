@@ -7,6 +7,10 @@ import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import { upsertWatchHistory, loadWatchHistory } from '../utils/watchHistory'
 import SmartImage from '../components/SmartImage'
+import { filterM3u8Ads } from '../utils/adFilter'
+import { trafficMonitor, TrafficStats } from '../utils/trafficMonitor'
+import { wakeLockManager } from '../utils/wakeLock'
+
 type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
@@ -199,6 +203,33 @@ const detectStreamKind = async (raw: string): Promise<'hls' | 'direct'> => {
 
 const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
 
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+class CustomPlaylistLoader extends Hls.DefaultConfig.loader {
+  constructor(config: any) {
+    super(config);
+    const load = this.load.bind(this);
+    this.load = function (context: any, config: any, callbacks: any) {
+      if (context.type === 'manifest' || context.type === 'level') {
+        const onSuccess = callbacks.onSuccess;
+        callbacks.onSuccess = function (response: any, stats: any, context: any) {
+          if (response.data && typeof response.data === 'string') {
+            response.data = filterM3u8Ads(response.data);
+          }
+          if (onSuccess) onSuccess(response, stats, context);
+        };
+      }
+      load(context, config, callbacks);
+    };
+  }
+}
+
 const probeHlsByFetch = async (url: string, timeoutMs: number): Promise<{ ok: boolean; ms: number }> => {
   const start = nowMs()
   const controller = new AbortController()
@@ -353,6 +384,13 @@ const Play: React.FC = () => {
   const [playerError, setPlayerError] = useState<string | null>(null)
   const [sourceSpeed, setSourceSpeed] = useState<Record<number, SpeedProbe>>({})
   const [episodeOrder, setEpisodeOrder] = useState<EpisodeOrder>(() => loadPrefs().episodeOrder)
+
+  const [trafficEnabled, setTrafficEnabled] = useState(() => trafficMonitor.getEnabled())
+  const [traffic, setTraffic] = useState<TrafficStats>({ domesticUp: 0, domesticDown: 0, intlUp: 0, intlDown: 0 })
+
+  useEffect(() => {
+    return trafficMonitor.subscribe(setTraffic)
+  }, [])
 
   useEffect(() => {
     if (detail) return
@@ -637,6 +675,18 @@ const Play: React.FC = () => {
             },
           },
           {
+            name: 'trafficStats',
+            html: '流量统计',
+            switch: true,
+            default: trafficEnabled,
+            onSwitch: (item) => {
+              const next = Boolean(item?.switch);
+              trafficMonitor.setEnabled(next);
+              setTrafficEnabled(next);
+              art.notice.show = next ? '流量统计：已开启' : '流量统计：已关闭';
+            },
+          },
+          {
             name: 'introMark',
             html: `片头：${marks.introEnd ? formatSec(marks.introEnd) : '--'}`,
             onClick: () => {
@@ -685,6 +735,7 @@ const Play: React.FC = () => {
               return
             }
             const hls = new Hls({
+              pLoader: CustomPlaylistLoader as any,
               enableWorker: true,
               backBufferLength: 30, // 允许保留过往 30 秒的视频缓存
               maxBufferLength: 60, // 增加向前缓冲时长到 60 秒，保证 Seek 后的连贯性
@@ -736,6 +787,7 @@ const Play: React.FC = () => {
       art.on('video:waiting', () => setPlayerLoading(true))
       art.on('video:playing', () => {
         setPlayerLoading(false)
+        wakeLockManager.request()
         const latest = loadPrefs()
         const latestMarks = getMarks(latest, markKey)
         const introEnd = latestMarks.introEnd || 0
@@ -744,6 +796,9 @@ const Play: React.FC = () => {
           art.currentTime = introEnd
           art.notice.show = `已跳过片头：${formatSec(introEnd)}`
         }
+      })
+      art.on('video:pause', () => {
+        wakeLockManager.release()
       })
       art.on('video:timeupdate', () => {
         const now = nowMs()
@@ -787,6 +842,7 @@ const Play: React.FC = () => {
         setPlayerError('播放失败')
       })
       art.on('destroy', () => {
+        wakeLockManager.release()
         upsertWatchHistory({
           id: `${siteKey}|${vodId}`,
           siteKey: siteKey || '',
@@ -868,6 +924,7 @@ const Play: React.FC = () => {
 
     return () => {
       cancelled = true
+      wakeLockManager.release()
       if (artRef.current) {
         artRef.current.destroy(false)
         artRef.current = null
@@ -928,6 +985,46 @@ const Play: React.FC = () => {
       cancelled = true
     }
   }, [playSources])
+
+  useEffect(() => {
+    if (!artRef.current || !trafficEnabled) return;
+    const html = `
+      <div style="background:rgba(0,0,0,0.6);color:white;font-size:12px;padding:12px;border-radius:4px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);display:flex;flex-direction:column;gap:6px;pointer-events:none;user-select:none;">
+        <div style="font-weight:500;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:4px;color:#00aeec;display:flex;align-items:center;gap:4px;">
+          <svg style="width:12px;height:12px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+          流量监控 (实时)
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国内下行:</span><span style="font-family:monospace;">${formatBytes(traffic.domesticDown)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国内上行:</span><span style="font-family:monospace;">${formatBytes(traffic.domesticUp)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国外下行:</span><span style="font-family:monospace;">${formatBytes(traffic.intlDown)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;"><span>国外上行:</span><span style="font-family:monospace;">${formatBytes(traffic.intlUp)}</span></div>
+      </div>
+    `;
+    
+    const layerName = 'trafficLayer';
+    if (artRef.current.layers[layerName]) {
+      artRef.current.layers[layerName].innerHTML = html;
+      artRef.current.layers[layerName].style.display = 'block';
+    } else {
+      artRef.current.layers.add({
+        name: layerName,
+        html,
+        style: {
+          position: 'absolute',
+          top: '20px',
+          left: '20px',
+          pointerEvents: 'none',
+          zIndex: '50'
+        }
+      });
+    }
+  }, [traffic, trafficEnabled]);
+
+  useEffect(() => {
+    if (!trafficEnabled && artRef.current?.layers['trafficLayer']) {
+      artRef.current.layers['trafficLayer'].style.display = 'none';
+    }
+  }, [trafficEnabled]);
 
   const switchEpisode = (sIndex: number, eIndex: number) => {
     setCurrentSourceIndex(sIndex)
