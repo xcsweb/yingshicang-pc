@@ -5,6 +5,15 @@ import { clearWatchHistory, loadWatchHistory, removeWatchHistory, type WatchHist
 
 const pad2 = (v: number): string => String(Math.max(0, Math.floor(v))).padStart(2, '0')
 
+const formatSec = (sec: number): string => {
+  const s = Math.max(0, Math.floor(sec))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = s % 60
+  if (h > 0) return `${pad2(h)}:${pad2(m)}:${pad2(ss)}`
+  return `${pad2(m)}:${pad2(ss)}`
+}
+
 const formatTime = (ms: number): string => {
   if (!ms) return ''
   const d = new Date(ms)
@@ -92,6 +101,11 @@ const History: React.FC = () => {
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-bili-text line-clamp-2">{item.vodName}</div>
                         <div className="mt-1 text-xs text-bili-textLight line-clamp-1">上次看到：{item.episodeName || '正片'}</div>
+                        {item.currentTime && item.currentTime > 0 ? (
+                          <div className="mt-1 text-xs text-bili-blue">
+                            进度：{formatSec(item.currentTime)} {item.duration ? `(${Math.min(100, Math.floor((item.currentTime / item.duration) * 100))}%)` : ''}
+                          </div>
+                        ) : null}
                         <div className="mt-1 text-xs text-bili-textMuted">{formatTime(item.updatedAt)}</div>
                       </div>
                     </div>

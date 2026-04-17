@@ -8,6 +8,8 @@ export type WatchHistoryItemV1 = {
   sourceIndex: number
   episodeIndex: number
   episodeName: string
+  currentTime?: number
+  duration?: number
   updatedAt: number
 }
 

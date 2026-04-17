@@ -5,6 +5,7 @@ import Hls from 'hls.js'
 import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
+import { upsertWatchHistory, loadWatchHistory } from '../utils/watchHistory'
 import SmartImage from '../components/SmartImage'
 type AspectRatio = Artplayer['aspectRatio']
 
@@ -536,6 +537,21 @@ const Play: React.FC = () => {
       routeRef.current = selection.route
       const initUrl = selection.useHlsJs ? playUrl : (selection.route === 'proxy' ? toMediaProxyUrl(playUrl) : playUrl)
 
+      const histItem = loadWatchHistory().find((h: any) => h.id === `${siteKey}|${vodId}`)
+      const isSameEpisode = histItem?.sourceIndex === currentSourceIndex && histItem?.episodeIndex === currentEpisodeIndex
+      const lastTime = isSameEpisode ? (histItem?.currentTime || 0) : 0
+
+      upsertWatchHistory({
+        id: `${siteKey}|${vodId}`,
+        siteKey: siteKey || '',
+        vodId: String(vodId),
+        vodName: detail?.vod_name || '',
+        vodPic: detail?.vod_pic || '',
+        sourceIndex: currentSourceIndex,
+        episodeIndex: currentEpisodeIndex,
+        episodeName: episode.name,
+      })
+
       const art = new Artplayer({
         container,
         url: initUrl,
@@ -700,15 +716,22 @@ const Play: React.FC = () => {
         switchEpisode(currentSourceIndex, nextIndex)
       }
 
+      let lastSaveTime = 0
+
       art.on('ready', () => {
         setPlayerLoading(false)
         const root = playerContainerRef.current
         if (!root) return
         const leftControls = root.querySelector('.art-controls-left')
-        if (!leftControls) return
-        const candidates = Array.from(leftControls.querySelectorAll('.art-control'))
-        const timeEl = candidates.find((el) => (el.textContent || '').includes(' / '))
-        if (timeEl) (timeEl as HTMLElement).classList.add('yc-art-time')
+        if (leftControls) {
+          const candidates = Array.from(leftControls.querySelectorAll('.art-control'))
+          const timeEl = candidates.find((el) => (el.textContent || '').includes(' / '))
+          if (timeEl) (timeEl as HTMLElement).classList.add('yc-art-time')
+        }
+        if (lastTime > 0) {
+          art.currentTime = lastTime
+          art.notice.show = `已为您跳转至上次观看位置 ${formatSec(lastTime)}`
+        }
       })
       art.on('video:waiting', () => setPlayerLoading(true))
       art.on('video:playing', () => {
@@ -723,6 +746,23 @@ const Play: React.FC = () => {
         }
       })
       art.on('video:timeupdate', () => {
+        const now = nowMs()
+        if (now - lastSaveTime > 5000) {
+          lastSaveTime = now
+          upsertWatchHistory({
+            id: `${siteKey}|${vodId}`,
+            siteKey: siteKey || '',
+            vodId: String(vodId),
+            vodName: detail?.vod_name || '',
+            vodPic: detail?.vod_pic || '',
+            sourceIndex: currentSourceIndex,
+            episodeIndex: currentEpisodeIndex,
+            episodeName: episode.name,
+            currentTime: art.currentTime,
+            duration: art.duration,
+          })
+        }
+
         const latest = loadPrefs()
         if (!latest.autoNext) return
         const latestMarks = getMarks(latest, markKey)
@@ -745,6 +785,20 @@ const Play: React.FC = () => {
       art.on('error', () => {
         setPlayerLoading(false)
         setPlayerError('播放失败')
+      })
+      art.on('destroy', () => {
+        upsertWatchHistory({
+          id: `${siteKey}|${vodId}`,
+          siteKey: siteKey || '',
+          vodId: String(vodId),
+          vodName: detail?.vod_name || '',
+          vodPic: detail?.vod_pic || '',
+          sourceIndex: currentSourceIndex,
+          episodeIndex: currentEpisodeIndex,
+          episodeName: episode.name,
+          currentTime: art.currentTime,
+          duration: art.duration,
+        })
       })
 
       artRef.current = art
