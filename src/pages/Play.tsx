@@ -6,6 +6,7 @@ import { useDataSourceStore } from '../store/dataSource'
 import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import SmartImage from '../components/SmartImage'
+import { trafficMonitor, type TrafficStats } from '../utils/trafficMonitor'
 type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
@@ -66,6 +67,14 @@ const formatSec = (sec: number): string => {
   if (h > 0) return `${pad2(h)}:${pad2(m)}:${pad2(ss)}`
   return `${pad2(m)}:${pad2(ss)}`
 }
+
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
 
 const clampNumber = (v: unknown, min: number, max: number, fallback: number): number => {
   const n = typeof v === 'number' ? v : Number(v)
@@ -352,6 +361,42 @@ const Play: React.FC = () => {
   const [playerError, setPlayerError] = useState<string | null>(null)
   const [sourceSpeed, setSourceSpeed] = useState<Record<number, SpeedProbe>>({})
   const [episodeOrder, setEpisodeOrder] = useState<EpisodeOrder>(() => loadPrefs().episodeOrder)
+  const [trafficEnabled, setTrafficEnabled] = useState(() => trafficMonitor.getEnabled())
+  const [traffic, setTraffic] = useState<TrafficStats>({ domesticUp: 0, domesticDown: 0, intlUp: 0, intlDown: 0 })
+  const [headphoneConnected, setHeadphoneConnected] = useState(false)
+
+  useEffect(() => {
+    const unsubscribe = trafficMonitor.subscribe(setTraffic);
+    return () => {
+      unsubscribe();
+    };
+  }, [])
+
+  useEffect(() => {
+    const checkHeadphone = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasHeadphone = devices.some(d => 
+          d.kind === 'audiooutput' && 
+          (d.label.toLowerCase().includes('headphone') || 
+           d.label.toLowerCase().includes('headset') || 
+           d.label.toLowerCase().includes('bluetooth') ||
+           d.label.toLowerCase().includes('airpods') ||
+           d.label.toLowerCase().includes('buds'))
+        );
+        setHeadphoneConnected(hasHeadphone);
+      } catch (e) {
+        console.warn('Failed to enumerate devices', e);
+      }
+    };
+    
+    checkHeadphone();
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', checkHeadphone);
+      return () => navigator.mediaDevices.removeEventListener('devicechange', checkHeadphone);
+    }
+  }, [])
 
   useEffect(() => {
     if (detail) return
@@ -723,6 +768,18 @@ const Play: React.FC = () => {
               const next = { ...prefs, autoNext: on } as PlayerPrefsV1
               savePrefs(next)
               art.notice.show = on ? '连播：开启' : '连播：关闭'
+            },
+          },
+          {
+            name: 'trafficStats',
+            html: '流量统计',
+            switch: true,
+            default: trafficEnabled,
+            onSwitch: (item) => {
+              const next = Boolean(item?.switch);
+              trafficMonitor.setEnabled(next);
+              setTrafficEnabled(next);
+              art.notice.show = next ? '流量统计：已开启' : '流量统计：已关闭';
             },
           },
           {
@@ -1115,8 +1172,14 @@ const Play: React.FC = () => {
             </div>
             
             <div className="mb-4 sm:mb-6 px-4 sm:px-0 pt-4 sm:pt-0">
-              <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2">
+              <h1 className="text-xl sm:text-2xl font-bold text-bili-text leading-tight mb-2 flex items-center gap-2">
                 {detail?.vod_name}
+                {headphoneConnected && (
+                  <span className="inline-flex items-center justify-center bg-bili-blue/10 text-bili-blue px-2 py-0.5 rounded text-xs" title="耳机已连接">
+                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6c3.314 0 6 2.686 6 6v4a2 2 0 01-2 2h-1a1 1 0 01-1-1v-4a1 1 0 011-1h1a4 4 0 00-8 0h1a1 1 0 011 1v4a1 1 0 01-1 1H8a2 2 0 01-2-2v-4c0-3.314 2.686-6 6-6z"></path></svg>
+                    耳机模式
+                  </span>
+                )}
               </h1>
               <div className="flex items-center text-sm text-bili-textLight gap-4">
                 <span className="flex items-center gap-1">
