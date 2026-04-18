@@ -45,6 +45,8 @@ type PlayerPrefsV1 = {
   autoNext: boolean
   episodeOrder: EpisodeOrder
   marksByKey: Record<string, SkipMarks>
+  volume: number
+  brightness: number
 }
 
 const PREFS_KEY = 'yingshicang-pc:playerPrefs:v1'
@@ -104,6 +106,8 @@ const loadPrefs = (): PlayerPrefsV1 => {
     autoNext: true,
     episodeOrder: 'asc',
     marksByKey: {},
+    volume: 1,
+    brightness: 1,
   }
   if (typeof window === 'undefined') return defaults
   const raw = window.localStorage.getItem(PREFS_KEY) || ''
@@ -116,6 +120,8 @@ const loadPrefs = (): PlayerPrefsV1 => {
     autoNext: typeof obj.autoNext === 'boolean' ? obj.autoNext : defaults.autoNext,
     episodeOrder: obj.episodeOrder === 'desc' || obj.episodeOrder === 'asc' ? obj.episodeOrder : defaults.episodeOrder,
     marksByKey: typeof obj.marksByKey === 'object' && obj.marksByKey ? obj.marksByKey : {},
+    volume: typeof obj.volume === 'number' ? clampNumber(obj.volume, 0, 1, 1) : defaults.volume,
+    brightness: typeof obj.brightness === 'number' ? clampNumber(obj.brightness, 0.2, 1, 1) : defaults.brightness,
   }
 }
 
@@ -616,6 +622,7 @@ const Play: React.FC = () => {
         fullscreenWeb: true,
         screenshot: true,
         mutex: true,
+        volume: prefs.volume, // 使用缓存的音量
         // 添加移动端专属优化
         autoOrientation: true, 
         fastForward: true, 
@@ -623,12 +630,12 @@ const Play: React.FC = () => {
         plugins: [
           (art) => {
             let startX = 0, startY = 0, isDragging = false, dragType: 'volume' | 'light' | 'progress' | 'none' = 'none';
-            let startVolume = 0, startProgress = 0, currentProgress = 0, startLight = 1;
+            let startVolume = 0, startProgress = 0, currentProgress = 0, startLight = prefs.brightness;
             
             const lightMask = document.createElement('div');
             lightMask.style.position = 'absolute';
             lightMask.style.inset = '0';
-            lightMask.style.backgroundColor = 'rgba(0,0,0,0)';
+            lightMask.style.backgroundColor = `rgba(0,0,0,${1 - startLight})`; // 初始使用缓存的亮度
             lightMask.style.pointerEvents = 'none';
             lightMask.style.zIndex = '50';
             
@@ -704,10 +711,10 @@ const Play: React.FC = () => {
                   tipEl.style.display = 'block';
                 } else if (dragType === 'light') {
                   if (e.cancelable) e.preventDefault();
-                  const percent = diffY / playerEl.clientHeight;
-                  startLight = Math.max(0, Math.min(0.8, startLight + percent * 0.1));
-                  lightMask.style.backgroundColor = `rgba(0,0,0,${startLight})`;
-                  tipEl.textContent = `亮度: ${Math.round((1 - startLight) * 100)}%`;
+                  const percent = -diffY / playerEl.clientHeight; // 向上滑动（负数），加上负号变为正数，亮度增加
+                  startLight = Math.max(0.2, Math.min(1, startLight + percent * 0.5)); // min bright 0.2, max 1
+                  lightMask.style.backgroundColor = `rgba(0,0,0,${1 - startLight})`;
+                  tipEl.textContent = `亮度: ${Math.round(startLight * 100)}%`;
                   tipEl.style.display = 'block';
                   startY = currentY;
                 }
@@ -716,6 +723,12 @@ const Play: React.FC = () => {
               playerEl.addEventListener('touchend', () => {
                 if (dragType === 'progress') {
                   art.currentTime = currentProgress;
+                } else if (dragType === 'light') {
+                  const latest = loadPrefs()
+                  savePrefs({ ...latest, brightness: startLight })
+                } else if (dragType === 'volume') {
+                  const latest = loadPrefs()
+                  savePrefs({ ...latest, volume: art.volume })
                 }
                 isDragging = false;
                 dragType = 'none';
