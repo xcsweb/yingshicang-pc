@@ -7,6 +7,9 @@ import { fetchData } from '../utils/request'
 import { enableHlsPrefetch } from '../utils/hlsPrefetch'
 import SmartImage from '../components/SmartImage'
 import { trafficMonitor, type TrafficStats } from '../utils/trafficMonitor'
+import { upsertWatchHistory, loadWatchHistory } from '../utils/watchHistory'
+import { wakeLockManager } from '../utils/wakeLock'
+import { filterM3u8Ads } from '../utils/adFilter'
 type AspectRatio = Artplayer['aspectRatio']
 
 interface Episode {
@@ -206,6 +209,25 @@ const detectStreamKind = async (raw: string): Promise<'hls' | 'direct'> => {
 }
 
 const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
+
+class CustomPlaylistLoader extends Hls.DefaultConfig.loader {
+  constructor(config: any) {
+    super(config);
+    const load = this.load.bind(this);
+    this.load = function (context: any, config: any, callbacks: any) {
+      if (context.type === 'manifest' || context.type === 'level') {
+        const onSuccess = callbacks.onSuccess;
+        callbacks.onSuccess = function (response: any, stats: any, context: any) {
+          if (response.data && typeof response.data === 'string') {
+            response.data = filterM3u8Ads(response.data);
+          }
+          if (onSuccess) onSuccess(response, stats, context);
+        };
+      }
+      load(context, config, callbacks);
+    };
+  }
+}
 
 const probeHlsByFetch = async (url: string, timeoutMs: number): Promise<{ ok: boolean; ms: number }> => {
   const start = nowMs()
@@ -831,8 +853,11 @@ const Play: React.FC = () => {
               return
             }
             const hls = new Hls({
+              pLoader: CustomPlaylistLoader as any,
               enableWorker: true,
-              backBufferLength: 30,
+              backBufferLength: 30, // 允许保留过往 30 秒的视频缓存
+              maxBufferLength: 60, // 增加向前缓冲时长到 60 秒，保证 Seek 后的连贯性
+              maxMaxBufferLength: 90, // 允许最大缓冲 90 秒
               xhrSetup: (xhr, reqUrl) => {
                 xhr.open('GET', routeRef.current === 'proxy' ? toMediaProxyUrl(reqUrl) : reqUrl, true)
               },
@@ -884,6 +909,12 @@ const Play: React.FC = () => {
 
       let introApplied = false
       let outroTriggered = false
+      
+      const history = loadWatchHistory()
+      const historyItem = history.find((h: any) => h.siteKey === siteKey && String(h.vodId) === String(vodId))
+      const lastTime = historyItem?.sourceIndex === currentSourceIndex && historyItem?.episodeIndex === currentEpisodeIndex 
+        ? (historyItem.currentTime || 0) 
+        : 0
 
       const doNextEpisode = () => {
         const latest = loadPrefs()
@@ -904,35 +935,123 @@ const Play: React.FC = () => {
         const candidates = Array.from(leftControls.querySelectorAll('.art-control'))
         const timeEl = candidates.find((el) => (el.textContent || '').includes(' / '))
         if (timeEl) (timeEl as HTMLElement).classList.add('yc-art-time')
+
+        // 自动恢复播放进度
+        const latest = loadPrefs()
+        const latestMarks = getMarks(latest, markKey)
+        const introEnd = latestMarks.introEnd || 0
+        
+        // 如果有历史记录进度且不是刚开始看，恢复到历史记录；如果小于片头，跳过片头
+        if (lastTime > 0 && lastTime > introEnd) {
+          art.currentTime = lastTime
+          art.notice.show = `已恢复到上次观看位置：${formatSec(lastTime)}`
+          introApplied = true // 既然恢复的位置已经过了片头，就标记为已跳过
+        } else if (introEnd > 0) {
+          art.currentTime = introEnd
+          art.notice.show = `已跳过片头：${formatSec(introEnd)}`
+          introApplied = true
+        }
       })
       art.on('video:waiting', () => setPlayerLoading(true))
       art.on('video:playing', () => {
         setPlayerLoading(false)
-        const latest = loadPrefs()
-        const latestMarks = getMarks(latest, markKey)
-        const introEnd = latestMarks.introEnd || 0
-        if (introEnd > 0 && !introApplied && art.currentTime + 0.2 < introEnd) {
-          introApplied = true
-          art.currentTime = introEnd
-          art.notice.show = `已跳过片头：${formatSec(introEnd)}`
+        wakeLockManager.request()
+        
+        // 双重保障，避免某些视频在 ready 时没加载完元数据导致 seek 失败
+        if (!introApplied) {
+          const latest = loadPrefs()
+          const latestMarks = getMarks(latest, markKey)
+          const introEnd = latestMarks.introEnd || 0
+          if (lastTime > 0 && lastTime > introEnd && art.currentTime < lastTime - 2) {
+            art.currentTime = lastTime
+            introApplied = true
+          } else if (introEnd > 0 && art.currentTime < introEnd - 2) {
+            art.currentTime = introEnd
+            introApplied = true
+          }
         }
       })
+      art.on('video:pause', () => {
+        wakeLockManager.release()
+      })
+      let lastSaveTime = 0
       art.on('video:timeupdate', () => {
         const latest = loadPrefs()
-        if (!latest.autoNext) return
         const latestMarks = getMarks(latest, markKey)
         let outroStart = latestMarks.outroStart || 0
         const outroLen = latestMarks.outroLen || 0
         if (!outroStart && outroLen > 0 && Number.isFinite(art.duration) && art.duration > 0) {
           outroStart = Math.max(0, art.duration - outroLen)
         }
+        
+        // Save watch history periodically (every 5 seconds)
+        const currentTimeMs = nowMs()
+        if (currentTimeMs - lastSaveTime > 5000) {
+          lastSaveTime = currentTimeMs
+          upsertWatchHistory({
+            siteKey: siteKey || '',
+            vodId: vodId || '',
+            vodName: detail?.vod_name || '',
+            vodPic: detail?.vod_pic || '',
+            sourceIndex: currentSourceIndex,
+            episodeIndex: currentEpisodeIndex,
+            currentTime: art.currentTime,
+            duration: art.duration || undefined,
+            updatedAt: Date.now()
+          })
+        }
+
+        if (!latest.autoNext) return
         if (!outroStart) return
         if (outroTriggered) return
         if (art.currentTime + 0.2 < outroStart) return
         outroTriggered = true
+        
+        // 当跳到下一集时，需要清空历史记录里的时间，保证它从0开始
+        upsertWatchHistory({
+          siteKey: siteKey || '',
+          vodId: vodId || '',
+          vodName: detail?.vod_name || '',
+          vodPic: detail?.vod_pic || '',
+          sourceIndex: currentSourceIndex,
+          episodeIndex: currentEpisodeIndex,
+          currentTime: 0,
+          duration: art.duration || undefined,
+          updatedAt: Date.now()
+        })
+        
         doNextEpisode()
       })
+      
+      // Save exact progress when seeking finishes
+      art.on('video:seeked', () => {
+        upsertWatchHistory({
+          siteKey: siteKey || '',
+          vodId: vodId || '',
+          vodName: detail?.vod_name || '',
+          vodPic: detail?.vod_pic || '',
+          sourceIndex: currentSourceIndex,
+          episodeIndex: currentEpisodeIndex,
+          currentTime: art.currentTime,
+          duration: art.duration || undefined,
+          updatedAt: Date.now()
+        })
+      })
+
       art.on('video:ended', () => {
+        // 视频正常播完时，也清理当前进度
+        upsertWatchHistory({
+          siteKey: siteKey || '',
+          vodId: vodId || '',
+          vodName: detail?.vod_name || '',
+          vodPic: detail?.vod_pic || '',
+          sourceIndex: currentSourceIndex,
+          episodeIndex: currentEpisodeIndex,
+          currentTime: 0,
+          duration: art.duration || undefined,
+          updatedAt: Date.now()
+        })
+        
         const latest = loadPrefs()
         if (!latest.autoNext) return
         doNextEpisode()
